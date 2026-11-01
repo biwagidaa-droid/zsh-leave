@@ -2,13 +2,68 @@
 import uuid
 
 from django.conf import settings
-from django.db import models
+from django.db import models, transaction
 from django.db.models import Q
 
 from zsh_core import workflow as wf
 
 STATUS_CHOICES = [(s, s) for s in (wf.PENDING, wf.ESCALATED, wf.APPROVED, wf.REJECTED,
                                    wf.CANCELLED, wf.WITHDRAWAL_PENDING)]
+
+
+class OrganizationalHierarchyQuerySet(models.QuerySet):
+    relationship_fields = {
+        "Department": {"company", "company_id", "parent", "parent_id"},
+        "EmployeeProfile": {
+            "company", "company_id", "department", "department_id", "manager", "manager_id",
+        },
+    }
+
+    def update(self, **kwargs):
+        protected_fields = self.relationship_fields.get(self.model.__name__, set())
+        if protected_fields.intersection(kwargs):
+            from django.core.exceptions import ValidationError
+
+            raise ValidationError("Use model save or the hierarchy service to change organizational relationships")
+        return super().update(**kwargs)
+
+    def bulk_create(self, objs, **kwargs):
+        if kwargs.get("ignore_conflicts") or kwargs.get("update_conflicts"):
+            raise ValueError("Conflict-ignoring bulk writes cannot validate organizational relationships")
+        objects = list(objs)
+        with transaction.atomic():
+            for obj in objects:
+                obj.save(force_insert=True)
+        return objects
+
+    def bulk_update(self, objs, fields, batch_size=None):
+        protected_fields = self.relationship_fields.get(self.model.__name__, set())
+        if protected_fields.intersection(fields):
+            objects = list(objs)
+            with transaction.atomic():
+                for obj in objects:
+                    obj.save(update_fields=fields)
+            return len(objects)
+        return super().bulk_update(objs, fields, batch_size=batch_size)
+
+    def delete(self):
+        protected_fields = self.relationship_fields.get(self.model.__name__, set())
+        if not protected_fields:
+            return super().delete()
+        objects = list(self)
+        total_deleted = 0
+        deleted_by_model = {}
+        with transaction.atomic():
+            for obj in objects:
+                deleted, counts = obj.delete()
+                total_deleted += deleted
+                for model_name, count in counts.items():
+                    deleted_by_model[model_name] = deleted_by_model.get(model_name, 0) + count
+        return total_deleted, deleted_by_model
+
+
+class OrganizationalHierarchyManager(models.Manager.from_queryset(OrganizationalHierarchyQuerySet)):
+    pass
 
 
 class Company(models.Model):
@@ -30,16 +85,46 @@ class OrganizationSite(models.Model):
 
 
 class Department(models.Model):
+    objects = OrganizationalHierarchyManager()
+
     company = models.ForeignKey(Company, on_delete=models.PROTECT)
     parent = models.ForeignKey("self", null=True, blank=True, on_delete=models.PROTECT)
     code = models.CharField(max_length=32)
     name = models.CharField(max_length=200)
 
     class Meta:
-        constraints = [models.UniqueConstraint(fields=["company", "code"], name="uniq_dept_code_in_company")]
+        constraints = [
+            models.UniqueConstraint(fields=["company", "code"], name="uniq_dept_code_in_company"),
+            models.CheckConstraint(
+                condition=Q(parent__isnull=True) | ~Q(parent=models.F("id")),
+                name="department_parent_not_self",
+            ),
+        ]
+
+    def clean(self):
+        from .hierarchy_services import validate_department_relationships
+
+        validate_department_relationships(self)
+
+    def save(self, *args, **kwargs):
+        from .hierarchy_services import lock_organizational_hierarchy
+
+        with transaction.atomic():
+            lock_organizational_hierarchy()
+            self.full_clean()
+            return super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        from .hierarchy_services import lock_organizational_hierarchy
+
+        with transaction.atomic():
+            lock_organizational_hierarchy()
+            return super().delete(*args, **kwargs)
 
 
 class EmployeeProfile(models.Model):
+    objects = OrganizationalHierarchyManager()
+
     ACCOUNT_CREATED = "created"
     INVITATION_PENDING = "invitation_pending"
     INVITATION_SENT = "invitation_sent"
@@ -79,6 +164,30 @@ class EmployeeProfile(models.Model):
             models.UniqueConstraint(fields=["company", "personnel_code"], name="uniq_personnel_code"),
             models.CheckConstraint(condition=~Q(manager=models.F("id")), name="manager_not_self"),
         ]
+
+    def clean(self):
+        from .hierarchy_services import validate_employee_relationships
+
+        validate_employee_relationships(self)
+
+    def save(self, *args, **kwargs):
+        from .hierarchy_services import lock_organizational_hierarchy
+
+        with transaction.atomic():
+            lock_organizational_hierarchy()
+            self.full_clean()
+            return super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        from .hierarchy_services import lock_organizational_hierarchy
+
+        with transaction.atomic():
+            lock_organizational_hierarchy()
+            reports = EmployeeProfile.objects.select_for_update().filter(manager_id=self.pk)
+            for report in reports:
+                report.manager = None
+                report.save(update_fields=["manager"])
+            return super().delete(*args, **kwargs)
 
 
 class EmployeeInvitation(models.Model):

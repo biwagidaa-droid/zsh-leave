@@ -291,8 +291,6 @@ class RBACApiTests(TestCase):
     def test_manager_team_calendar_does_not_cross_company_even_with_forged_snapshot(self):
         self.employee_a.manager = self.manager
         self.employee_a.save(update_fields=["manager"])
-        self.employee_b.manager = self.manager
-        self.employee_b.save(update_fields=["manager"])
         leave_type = LeaveType.objects.create(key="annual", label_fa="Annual")
         for employee in (self.employee_a, self.employee_b):
             LeaveRequest.objects.create(

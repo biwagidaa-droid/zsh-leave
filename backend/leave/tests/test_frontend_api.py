@@ -184,6 +184,51 @@ class FrontendApiTests(TestCase):
         self.assertTrue(self.leave_type.requires_approval)
         self.assertEqual(AuditEvent.objects.filter(entity="LeaveType").count(), audit_count)
 
+    def test_employee_cannot_reassign_manager_through_employee_api(self):
+        manager_user = get_user_model().objects.create_user(username="unauthorized-manager")
+        manager = EmployeeProfile.objects.create(
+            user=manager_user, company=self.company, department=self.department,
+            personnel_code="M-UNAUTH", start_date=dt.date(2020, 1, 1),
+        )
+        self.client.force_authenticate(self.employee_user)
+
+        response = self.client.patch(
+            f"/api/v1/employees/{self.employee.pk}/",
+            {"managerId": manager.pk},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.employee.refresh_from_db()
+        self.assertIsNone(self.employee.manager_id)
+
+    def test_hr_employee_api_accepts_valid_manager_and_rejects_cycle(self):
+        manager_payload = {
+            "displayName": "Employee",
+            "personnelCode": self.employee.personnel_code,
+            "companyId": self.company.pk,
+            "managerId": self.hr.pk,
+        }
+        assigned = self.client.patch(
+            f"/api/v1/employees/{self.employee.pk}/", manager_payload, format="json",
+        )
+        self.assertEqual(assigned.status_code, 200, assigned.content)
+        self.employee.refresh_from_db()
+        self.assertEqual(self.employee.manager_id, self.hr.pk)
+
+        cycle_payload = {
+            "displayName": "Human resources",
+            "personnelCode": self.hr.personnel_code,
+            "companyId": self.company.pk,
+            "managerId": self.employee.pk,
+        }
+        cycle = self.client.patch(
+            f"/api/v1/employees/{self.hr.pk}/", cycle_payload, format="json",
+        )
+        self.assertEqual(cycle.status_code, 400, cycle.content)
+        self.hr.refresh_from_db()
+        self.assertIsNone(self.hr.manager_id)
+
     def test_global_admin_can_manage_and_audit_leave_types(self):
         admin = get_user_model().objects.create_user(username="leave-type-admin")
         RoleAssignment.objects.create(
