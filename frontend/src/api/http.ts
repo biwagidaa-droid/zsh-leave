@@ -81,7 +81,12 @@ export const httpApi: Api = {
   me: () => req("/auth/me"),
   changePassword: (current, next) => req("/auth/password", { method: "POST", body: JSON.stringify({ current, next }) }),
   listTypes: () => req("/leave-types/"),
-  saveType: (t) => req(t.id ? `/leave-types/${t.id}/` : "/leave-types/", { method: t.id ? "PATCH" : "POST", body: JSON.stringify(t) }),
+  saveType: (t) => {
+    const { id, ...body } = t;
+    return req(id ? `/leave-types/${id}/` : "/leave-types/", {
+      method: id ? "PATCH" : "POST", body: JSON.stringify(body),
+    });
+  },
   listRequests: (f: RequestFilters) => {
     const q = new URLSearchParams();
     if (f.page) q.set("page", String(f.page));
@@ -107,12 +112,22 @@ export const httpApi: Api = {
     method: "POST", headers: { "Idempotency-Key": idempotencyKey() }, body: JSON.stringify({ body }),
   }),
   listAttachments: (id) => req(`/leave-requests/${id}/attachments/`),
-  addAttachment: (id, fileName) => req(`/leave-requests/${id}/attachments/`, { method: "POST", body: JSON.stringify({ fileName }) }),
+  addAttachment: (id, file) => {
+    const form = new FormData();
+    form.append("file", file, file.name);
+    return req(`/leave-requests/${id}/attachments/`, {
+      method: "POST", body: form,
+    });
+  },
   balances: (year, employeeId) => req(`/balances/?year=${year}${employeeId ? `&employee=${employeeId}` : ""}`),
   entitlements: (year) => req(`/entitlements/?year=${year}`),
-  adjustEntitlement: (id, days, reason) => req(`/entitlements/${id}/adjust`, { method: "POST", body: JSON.stringify({ days, reason }) }),
+  adjustEntitlement: (id, days, reason) => req(`/entitlements/${id}/adjust`, {
+    method: "POST", headers: { "Idempotency-Key": idempotencyKey() }, body: JSON.stringify({ days, reason }),
+  }),
   importEntitlements: (csv, dryRun) => req(`/entitlements/import/?dry_run=${dryRun ? "1" : "0"}`, { method: "POST", body: JSON.stringify({ csv }) }),
-  recordAbsence: (d: LeaveDraft) => req("/hr/absences/", { method: "POST", body: JSON.stringify(d) }),
+  recordAbsence: (d: LeaveDraft) => req("/hr/absences/", {
+    method: "POST", headers: { "Idempotency-Key": idempotencyKey() }, body: JSON.stringify(d),
+  }),
   calendar: (from, to, scope) => req(`/calendar/events/?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&scope=${scope}`),
   calendarHolidays: (from, to) => req(`/calendar/holidays/?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`),
   holidays: () => req("/holidays/"),
@@ -121,11 +136,26 @@ export const httpApi: Api = {
   notifications: () => req("/notifications/"),
   readNotification: (id) => req(`/notifications/${id}/read`, { method: "POST" }),
   employees: (q) => req(`/employees/${q ? `?q=${encodeURIComponent(q)}` : ""}`),
-  saveEmployee: (e) => req(e.id ? `/employees/${e.id}/` : "/employees/", { method: e.id ? "PATCH" : "POST", body: JSON.stringify(e) }),
+  saveEmployee: (e) => {
+    const { id, ...body } = e;
+    return req(id ? `/employees/${id}/` : "/employees/", {
+      method: id ? "PATCH" : "POST", body: JSON.stringify(body),
+    });
+  },
   companies: () => req("/companies/"),
   departments: () => req("/departments/"),
-  saveCompany: (c) => req(c.id ? `/companies/${c.id}/` : "/companies/", { method: c.id ? "PATCH" : "POST", body: JSON.stringify(c) }),
-  saveDepartment: (d) => req(d.id ? `/departments/${d.id}/` : "/departments/", { method: d.id ? "PATCH" : "POST", body: JSON.stringify(d) }),
+  saveCompany: (c) => {
+    const { id, ...body } = c;
+    return req(id ? `/companies/${id}/` : "/companies/", {
+      method: id ? "PATCH" : "POST", body: JSON.stringify(body),
+    });
+  },
+  saveDepartment: (d) => {
+    const { id, ...body } = d;
+    return req(id ? `/departments/${id}/` : "/departments/", {
+      method: id ? "PATCH" : "POST", body: JSON.stringify(body),
+    });
+  },
   contracts: (employeeId) => req(`/employees/${employeeId}/contract-periods/`),
   saveContract: (p) => req(`/employees/${p.employeeId}/contract-periods/`, { method: "POST", body: JSON.stringify(p) }),
   coverage: (from, to) => req(`/coverage/?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`),
@@ -134,7 +164,19 @@ export const httpApi: Api = {
   saveSetting: (key, value, reason) => req("/admin/settings/", { method: "POST", body: JSON.stringify({ key, value, reason }) }),
   jobs: () => req("/admin/jobs/"),
   audit: () => req("/audit/events/"),
-  health: () => req("/health/ready"),
+  health: async () => {
+    const response = await req<{
+      status: string;
+      checks: { name: string; ok: boolean; message: string }[];
+    }>("/ready/");
+    const database = response.checks.find((check) => check.name === "database");
+    return {
+      live: true,
+      ready: response.status === "ready",
+      db: database?.message ?? "نامشخص",
+      lastJob: null,
+    };
+  },
   estimate: (employeeId, start, end) => req(`/working-days/estimate?employee=${employeeId ?? ""}&start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`),
   clientPolicy: () => req("/policy/client"),
   bradfordNotes: () => req("/hr/bradford-notes/"),

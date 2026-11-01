@@ -56,6 +56,12 @@ def _bool(v):
     return v
 
 
+def _nonempty_text(v):
+    if not isinstance(v, str) or not v.strip():
+        raise SettingError("متن الزامی است")
+    return v.strip()
+
+
 def _int_range(v, lo: int, hi: int):
     if isinstance(v, bool) or not isinstance(v, int) or not lo <= v <= hi:
         raise SettingError(f"عدد صحیح بین {lo} و {hi}")
@@ -106,6 +112,20 @@ _DEFS = [
                "همکاران نوع مرخصی را در تقویم ببینند (پیش‌فرض: فقط «غایب»)", "privacy"),
     SettingDef("privacy.min_group_size", 5, lambda v: _int_range(v, 2, 100),
                "حداقل اندازه گروه در گزارش تجمیعی (پیش‌فرض ۵؛ نیازمند تأیید سازمان)", "privacy"),
+    SettingDef("bradford.enabled", True, _bool, "فعال بودن تحلیل Bradford", "bradford"),
+    SettingDef("bradford.include_types", "sick", _nonempty_text,
+               "کلید انواع مرخصی مشمول (جداشده با کاما)", "bradford"),
+    SettingDef("bradford.include_hourly", False, _bool, "شمارش مرخصی ساعتی", "bradford"),
+    SettingDef("bradford.hourly_minutes_per_day", 480, lambda v: _int_range(v, 1, 1440),
+               "دقایق معادل یک روز کاری", "bradford"),
+    SettingDef("bradford.threshold_attention", 50, lambda v: _int_range(v, 1, 1_000_000),
+               "آستانه توجه Bradford", "bradford"),
+    SettingDef("bradford.threshold_warn", 200, lambda v: _int_range(v, 1, 1_000_000),
+               "آستانه هشدار Bradford", "bradford"),
+    SettingDef("bradford.threshold_serious", 500, lambda v: _int_range(v, 1, 1_000_000),
+               "آستانه هشدار جدی Bradford", "bradford"),
+    SettingDef("bradford.threshold_review", 1000, lambda v: _int_range(v, 1, 1_000_000),
+               "آستانه بررسی HR در Bradford", "bradford"),
     # تصمیم‌نگرفته (OQ-04): None = غیرفعال
     SettingDef("workflow.reminder_after_working_days", None, _opt_int(0, 60),
                "یادآوری به مدیر پس از N روز کاری (خالی = غیرفعال)", "workflow"),
@@ -132,6 +152,12 @@ def resolve(overrides: dict[str, Any] | None = None) -> dict[str, Any]:
     out = defaults()
     for k, v in (overrides or {}).items():
         out[k] = validate_setting(k, v)
+    thresholds = [
+        out[f"bradford.threshold_{name}"]
+        for name in ("attention", "warn", "serious", "review")
+    ]
+    if thresholds != sorted(set(thresholds)):
+        raise SettingError("آستانه‌های Bradford باید اکیداً صعودی باشند")
     return out
 
 

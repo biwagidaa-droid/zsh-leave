@@ -49,7 +49,7 @@ These same-origin endpoints use Django session cookies and match the frontend HT
 | GET | `/api/v1/auth/me` | Returns the authenticated frontend `User` shape, or 401 when there is no valid session. Also bootstraps/refreshes the CSRF cookie for the SPA. |
 | POST | `/api/v1/auth/password` | Requires an authenticated session and CSRF token; accepts `{ "current": "...", "next": "..." }`, validates the new password, and returns 204. The session remains active with its key rotated. |
 
-Sessions expire after eight hours and are browser-session cookies. Session cookies are HttpOnly and SameSite=Lax; production cookies require HTTPS. Passwords are stored with Argon2, while existing PBKDF2 hashes remain verifiable and upgrade on successful authentication. Password reset and account provisioning are not exposed by this API.
+Sessions expire after eight hours and are browser-session cookies. Session cookies are HttpOnly and SameSite=Lax; production cookies require HTTPS. Passwords are stored with Argon2, while existing PBKDF2 hashes remain verifiable and upgrade on successful authentication. Employee creation provisions a username with an unusable password; password reset/onboarding is not exposed by this API.
 
 The `roles` and organization fields in the user response are display/route metadata resolved from the backend authorization context. Actual API access is independently enforced server-side and never trusts frontend roles.
 
@@ -114,19 +114,43 @@ Out-of-scope request IDs return 404. Invalid transitions and idempotency conflic
 
 The legacy `/api/v1/holidays/` API remains available for one-day Jalali `PublicHoliday` entries and uses the same superuser-only write boundary. Its DELETE operation is logical deactivation and requires a reason.
 
+### Phase F frontend integration APIs
+
+These endpoints back the remaining frontend pages. They require an authenticated session unless noted. Role and organization scope are checked by the backend; the frontend's role guards are not authorization controls.
+
+| Method | Endpoint | Contract |
+|---|---|---|
+| GET/POST/PATCH | `/api/v1/leave-types/`, `/api/v1/leave-types/{id}/` | Read requestable types or manage types as HR/admin. Responses use the frontend camel-case `LeaveType` shape. |
+| GET | `/api/v1/balances/?year={year}&employee={id?}` | Return ledger-derived balance projections for self, direct reports, or assigned HR scope. Reconciliation failures return 409. |
+| GET | `/api/v1/entitlements/?year={year}` | List in-scope HR entitlements. |
+| POST | `/api/v1/entitlements/{id}/adjust` | Append a ledger adjustment; `{days, reason}` is required. |
+| POST | `/api/v1/entitlements/import/?dry_run=0\|1` | Validate CSV (`personnel_code,type,year,days`). Commit is all-or-nothing and uses the entitlement ledger. |
+| POST | `/api/v1/hr/absences/` | Submit and approve an absence for an employee in the caller's HR scope. |
+| GET | `/api/v1/employees/`, `/api/v1/companies/`, `/api/v1/departments/` | Read employee/organization rows scoped to the caller. Employee search accepts `q`. Employee creation is HR/admin; company and department writes are admin-only. |
+| GET/POST | `/api/v1/employees/{id}/contract-periods/` | Read/add validated employee work-contract periods; HR must have scope for the employee. |
+| GET | `/api/v1/coverage/?from={date}&to={date}` | Aggregate approved absences per department/day for the caller's HR or manager scope; maximum 93 days. |
+| GET | `/api/v1/reports/{kind}` | Return aggregate series for `absences`, `balances`, `trends`, or `process-health`; small groups are suppressed using `privacy.min_group_size`. The `bradford` option returns a note directing users to the scoped Bradford page. |
+| GET/POST | `/api/v1/admin/settings/` | Read/validate/audit schema-defined settings; system-admin only. |
+| GET | `/api/v1/admin/jobs/` | Returns an empty list until persistent job-run records are implemented; system-admin only. |
+| GET | `/api/v1/audit/events/` | Return recent audit rows for system admins, or request-related rows within HR scope. |
+| GET | `/api/v1/policy/client` | Return actual employee-specific calendar work-pattern values. Hourly leave and auto-cancel remain disabled until backend policy support exists. |
+| GET/POST | `/api/v1/hr/bradford-notes/` | Read/upsert notes for employees in HR scope. |
+| GET/POST | `/api/v1/leave-requests/{id}/attachments/` | List or upload a PDF/PNG/JPEG file up to 10 MiB for a visible request. Files are stored under generated private paths; contents are signature-checked. |
+| GET | `/api/v1/leave-requests/{id}/attachments/{attachmentId}/` | Authenticated download for a visible request participant; attachment IDs are scoped to that request and responses are private/no-store. |
+| GET | `/api/v1/ready/` | Frontend health check; the HTTP client maps readiness and database checks into the UI health shape. |
+
+Demo data is selected only in development. Production builds always use the HTTP API and do not substitute demo rows after API errors. Report file exports and secure request attachments remain explicitly unavailable.
+
 ### Schema endpoints
 - `GET /api/v1/schema/` — Implemented via drf-spectacular
 - `GET /api/v1/docs/` — Implemented via Swagger UI
 
 ## 4. Planned but Unimplemented
 - Frontend management screens for range holidays, work patterns, and policy versions
-- Frontend management screens for range holidays, work patterns, and policy versions
 - backend-authoritative hourly leave calculations tied to work patterns and holidays
 - leave-year configuration, rollover, expiry, and their ledger operations
-- full employee/HR workflow endpoints
-- report generation endpoints
-- admin setting endpoints
-- password reset and account provisioning APIs
+- persistent scheduler/job-run records and report file exports
+- password reset/onboarding APIs
 
 ## 5. Notes
 - Pagination, filtering, and idempotency are enforced on the Phase D leave-request API, not globally on unrelated API resources.

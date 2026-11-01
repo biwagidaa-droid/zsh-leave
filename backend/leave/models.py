@@ -1,4 +1,6 @@
 """مدل‌های هسته. مهاجرت‌ها باید روی ماشین دارای Django تولید و بازبینی شوند (makemigrations)."""
+import uuid
+
 from django.conf import settings
 from django.db import models
 from django.db.models import Q
@@ -533,6 +535,68 @@ class LeaveRequestComment(_AppendOnly):
     actor = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT)
     body = models.TextField()
     created_at = models.DateTimeField(auto_now_add=True)
+
+
+def attachment_upload_path(instance, filename):
+    name = filename.replace("\\", "/").rsplit("/", 1)[-1]
+    extension = name.rsplit(".", 1)[-1].lower() if "." in name else ""
+    if extension not in {"pdf", "png", "jpg", "jpeg"}:
+        extension = "bin"
+    return f"leave-attachments/{instance.request_id}/{uuid.uuid4().hex}.{extension}"
+
+
+class LeaveRequestAttachment(models.Model):
+    request = models.ForeignKey(LeaveRequest, on_delete=models.PROTECT, related_name="attachments")
+    file = models.FileField(upload_to=attachment_upload_path)
+    file_name = models.CharField(max_length=255)
+    content_type = models.CharField(max_length=100)
+    file_size = models.PositiveBigIntegerField()
+    uploaded_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["created_at", "pk"]
+
+
+class NotificationRead(models.Model):
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    event = models.ForeignKey(LeaveRequestEvent, on_delete=models.CASCADE)
+    read_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["user", "event"], name="uniq_notification_read"),
+        ]
+
+
+class BradfordNote(models.Model):
+    employee = models.OneToOneField(EmployeeProfile, on_delete=models.CASCADE)
+    body = models.TextField()
+    updated_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT)
+    updated_at = models.DateTimeField(auto_now=True)
+
+
+class ContractPeriod(models.Model):
+    employee = models.ForeignKey(EmployeeProfile, on_delete=models.PROTECT, related_name="contracts")
+    start_date = models.DateField()
+    end_date = models.DateField(null=True, blank=True)
+    work_days = models.JSONField()
+    contract_percent = models.DecimalField(max_digits=5, decimal_places=2)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-start_date", "-pk"]
+        constraints = [
+            models.CheckConstraint(
+                condition=Q(end_date__isnull=True) | Q(start_date__lte=models.F("end_date")),
+                name="contract_period_valid_dates",
+            ),
+            models.CheckConstraint(
+                condition=Q(contract_percent__gt=0) & Q(contract_percent__lte=100),
+                name="contract_period_percent_range",
+            ),
+        ]
 
 
 class WorkflowIdempotency(models.Model):

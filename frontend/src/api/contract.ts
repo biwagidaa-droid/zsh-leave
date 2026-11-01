@@ -42,7 +42,7 @@ export interface Api {
   listComments(id: number): Promise<Comment[]>;
   addComment(id: number, body: string): Promise<Comment>;
   listAttachments(id: number): Promise<Attachment[]>;
-  addAttachment(id: number, fileName: string): Promise<Attachment>;
+  addAttachment(id: number, file: File): Promise<Attachment>;
   balances(year: number, employeeId?: number): Promise<Balance[]>;
   entitlements(year: number): Promise<Entitlement[]>;
   adjustEntitlement(id: number, days: string, reason: string): Promise<Entitlement>;
@@ -69,7 +69,7 @@ export interface Api {
   saveSetting(key: string, value: unknown, reason: string): Promise<SettingItem>;
   jobs(): Promise<JobRow[]>;
   audit(): Promise<AuditRow[]>;
-  health(): Promise<{ live: boolean; ready: boolean; db: string; lastJob: string }>;
+  health(): Promise<{ live: boolean; ready: boolean; db: string; lastJob: string | null }>;
   estimate(employeeId: number | null, start: string, end: string): Promise<{
     days: number | string;
     estimated: boolean;

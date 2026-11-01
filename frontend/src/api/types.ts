@@ -80,6 +80,7 @@ export type Attachment = {
   fileName: string;
   sizeLabel: string;
   createdAt: string;
+  downloadUrl?: string;
 };
 
 export type Balance = {

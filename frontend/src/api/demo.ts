@@ -538,9 +538,9 @@ export const demoApi: Api = {
     await this.getRequest(id);
     return db.attachments[id] ?? [];
   },
-  async addAttachment(id, fileName) {
+  async addAttachment(id, file) {
     await this.getRequest(id);
-    const a: Attachment = { id: nextId(), fileName, sizeLabel: "نمایشی", createdAt: todayIso() };
+    const a: Attachment = { id: nextId(), fileName: file.name, sizeLabel: "نمایشی", createdAt: todayIso() };
     db.attachments[id] = [...(db.attachments[id] ?? []), a];
     save();
     return a;

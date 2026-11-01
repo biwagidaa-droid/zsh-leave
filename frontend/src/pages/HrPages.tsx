@@ -246,10 +246,7 @@ export function ReportsPage() {
         {DEMO_MODE ? (
           <span className="hint">خروجی CSV/XLSX در حالت Demo در دسترس نیست.</span>
         ) : (
-          <>
-            <a className="btn secondary sm" href={`/api/v1/exports/${kind}.csv`} download>خروجی CSV</a>
-            <a className="btn secondary sm" href={`/api/v1/exports/${kind}.xlsx`} download>خروجی XLSX</a>
-          </>
+          <span className="hint">خروجی CSV/XLSX هنوز در API عملیاتی پیاده‌سازی نشده است.</span>
         )}
       </div>
       {error && <ErrorState message={error} onRetry={() => void reload()} />}

@@ -10,7 +10,6 @@ import {
 } from "../components/ui";
 import { DeadlineLabel } from "../components/Deadline";
 import { expiryDate } from "../lib/autoCancel";
-import { DEFAULT_CLIENT_POLICY } from "../lib/clientPolicy";
 import { deadlineInfo } from "../lib/deadline";
 import { camelFields, positiveNumber } from "../lib/forms";
 import { focusFirstInvalid, useDebounced } from "../lib/hooks";
@@ -124,7 +123,7 @@ export function RequestNewPage() {
   const effKind: DurationKind = hourlyAllowed ? kind : "daily";
   const hourly = effKind === "hourly";
   const minutes = minutesBetween(startTime, endTime);
-  const workdayMinutes = policy?.workdayMinutes ?? DEFAULT_CLIENT_POLICY.workdayMinutes;
+  const workdayMinutes = policy?.workdayMinutes ?? 0;
   const existing: ExistingInterval[] = (mine?.results ?? []).map((r) => ({
     id: r.id, employeeId: r.employeeId, status: r.status, start: r.start, end: r.end,
     durationKind: r.durationKind, startTime: r.startTime, endTime: r.endTime,
@@ -173,11 +172,11 @@ export function RequestNewPage() {
       const herr = validateHourlyDraft(
         { date: start, startTime, endTime },
         {
-          workdayStart: policy?.workdayStart ?? DEFAULT_CLIENT_POLICY.workdayStart,
-          workdayEnd: policy?.workdayEnd ?? DEFAULT_CLIENT_POLICY.workdayEnd,
+          workdayStart: policy?.workdayStart ?? "",
+          workdayEnd: policy?.workdayEnd ?? "",
           allowOutsideWorkHours: policy?.hourlyAllowOutsideWorkHours ?? false,
           allowOnHoliday: policy?.hourlyAllowOnHoliday ?? false,
-          maxMinutesPerRequest: policy?.hourlyMaxMinutesPerRequest ?? DEFAULT_CLIENT_POLICY.hourlyMaxMinutesPerRequest,
+          maxMinutesPerRequest: policy?.hourlyMaxMinutesPerRequest ?? 0,
           workWeekdays: [0, 1, 2, 3, 4, 5, 6],
         },
         holidayIsosForRange(holidayRows ?? [], start || todayIso(), start || todayIso()),
@@ -377,6 +376,8 @@ export function RequestDetailPage() {
   const { data: files, error: filesError, reload: rf } = useAsync(
     () => (showExtras ? api.listAttachments(rid) : Promise.resolve([])), [rid, showExtras],
   );
+  const fileInput = useRef<HTMLInputElement>(null);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [note, setNote] = useState("");
   const [noteError, setNoteError] = useState("");
   const [noteBusy, setNoteBusy] = useState(false);
@@ -447,11 +448,14 @@ export function RequestDetailPage() {
   };
 
   const addFile = async () => {
+    if (!selectedFile) return;
     setFileBusy(true);
     try {
-      await api.addAttachment(rid, "پیوست-نمایشی.pdf");
+      await api.addAttachment(rid, selectedFile);
       await rf();
-      toast("پیوست نمایشی افزوده شد", "success");
+      setSelectedFile(null);
+      if (fileInput.current) fileInput.current.value = "";
+      toast(DEMO_MODE ? "پیوست نمایشی افزوده شد" : "پیوست بارگذاری شد", "success");
     } catch (err) {
       toast(errorMessage(err), "danger");
     } finally {
@@ -590,13 +594,27 @@ export function RequestDetailPage() {
           {filesError && <ErrorState message={filesError} onRetry={() => void rf()} />}
           {!filesError && !(files ?? []).length && <p className="muted">پیوستی وجود ندارد.</p>}
           <ul className="list">
-            {(files ?? []).map((f) => <li key={f.id}><span>{f.fileName}</span><span className="hint">{f.sizeLabel}</span></li>)}
+            {(files ?? []).map((f) => (
+              <li key={f.id}>
+                {f.downloadUrl ? <a href={f.downloadUrl}>{f.fileName}</a> : <span>{f.fileName}</span>}
+                <span className="hint">{f.sizeLabel}</span>
+              </li>
+            ))}
           </ul>
-          {DEMO_MODE ? (
-            <Button variant="secondary" size="sm" loading={fileBusy} onClick={() => void addFile()}>افزودن پیوست نمایشی</Button>
-          ) : (
-            <Banner tone="warn">بارگذاری عملیاتی پیوست تا پیاده‌سازی API امن Backend در دسترس نیست.</Banner>
-          )}
+          <input
+            ref={fileInput} type="file" hidden
+            accept=".pdf,.png,.jpg,.jpeg,application/pdf,image/png,image/jpeg"
+            onChange={(event) => setSelectedFile(event.target.files?.[0] ?? null)}
+          />
+          <div className="toolbar">
+            <Button variant="secondary" size="sm" onClick={() => fileInput.current?.click()}>
+              انتخاب فایل
+            </Button>
+            {selectedFile && <span className="hint">{selectedFile.name}</span>}
+            <Button size="sm" loading={fileBusy} disabled={!selectedFile} onClick={() => void addFile()}>
+              {DEMO_MODE ? "افزودن پیوست نمایشی" : "بارگذاری پیوست"}
+            </Button>
+          </div>
         </Card>
       )}
       {pending && (
