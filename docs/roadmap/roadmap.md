@@ -25,8 +25,9 @@ Status legend: Not Started, In Progress, Blocked, Completed, Needs Review.
 
 ## Phase 03 – Operational Authentication and Authorization
 - Goal: Implement real identity, RBAC, and organizational policy enforcement.
-- Scope: Session authentication is implemented; remaining scope is RBAC, organization scopes, and user lifecycle administration.
-- Status: In Progress (Phase B authentication complete; authorization pending)
+- Scope: Session authentication, centralized RBAC, organization scopes, and user lifecycle administration.
+- Status: In Progress (Phase B authentication and Phase C centralized RBAC complete; operational leave API authorization remains dependent on Phase 04)
+- Phase C deliverables: persisted/audited role assignments, scoped permission engine and ORM selectors, object-level leave policies, role-management API, and adversarial policy/API tests.
 - Dependencies: Phase 02 foundation, approved business policy decisions, HR migration data.
 
 ## Phase 04 – Core HR and Leave Operations
@@ -44,7 +45,7 @@ Status legend: Not Started, In Progress, Blocked, Completed, Needs Review.
 - Goal: Provide one trustworthy calendar conversion and business-day foundation for operational leave workflows.
 - Status: In Progress (partial; not production-ready)
 - Completed in this increment: authenticated calendar/holiday/day-estimate APIs; effective-dated Work Pattern and immutable Policy models/services; holiday audit history; daily leave submission uses backend workday calculation and policy snapshot; calendar UI reads event/holiday APIs in HTTP mode.
-- Remaining: HR RBAC and organization-scoped management, management UI for policy/work patterns/range holidays, backend hourly calculations, configurable leave-year/rollover/expiry, PostgreSQL and end-to-end verification.
+- Remaining: management UI for policy/work patterns/range holidays, backend hourly calculations, configurable leave-year/rollover/expiry, PostgreSQL and end-to-end verification.
 - Dependencies: approved organization roles and HR policy decisions; actual company/site work schedules and official holiday sources.
 
 ## Phase 07 – Jobs, Scheduler, and Notifications

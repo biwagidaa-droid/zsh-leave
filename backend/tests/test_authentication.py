@@ -7,12 +7,11 @@ os.environ.setdefault("ZSH_SECRET_KEY", "test-secret-key")
 
 from django.contrib.auth import authenticate, get_user_model
 from django.contrib.auth.hashers import make_password
-from django.contrib.auth.models import Group
 from django.core.cache import cache
 from django.test import TestCase
 from rest_framework.test import APIClient
 
-from leave.models import AuditEvent, Company, Department, EmployeeProfile
+from leave.models import AuditEvent, Company, Department, EmployeeProfile, RoleAssignment
 
 User = get_user_model()
 OLD_PASSWORD = "Old-Secret-Long-123!"
@@ -222,8 +221,11 @@ class AuthenticationApiTests(TestCase):
         legacy.refresh_from_db()
         self.assertTrue(legacy.password.startswith("argon2$"))
 
-    def test_frontend_role_metadata_uses_existing_group_and_reporting_data(self):
-        Group.objects.create(name="HR").user_set.add(self.user)
+    def test_frontend_role_metadata_uses_role_assignments_and_reporting_data(self):
+        RoleAssignment.objects.create(
+            user=self.user, role=RoleAssignment.ROLE_HR,
+            scope=RoleAssignment.SCOPE_COMPANY, company=self.company,
+        )
         manager = User.objects.create_user(username="manager", password=OLD_PASSWORD)
         EmployeeProfile.objects.create(
             user=manager,

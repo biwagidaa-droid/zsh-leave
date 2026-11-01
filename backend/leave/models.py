@@ -56,6 +56,124 @@ class EmployeeProfile(models.Model):
         ]
 
 
+class RoleAssignment(models.Model):
+    ROLE_HR = "hr"
+    ROLE_ADMIN = "admin"
+    ROLE_EXEC = "exec"
+    ROLE_CHOICES = [
+        (ROLE_HR, "HR"),
+        (ROLE_ADMIN, "System administrator"),
+        (ROLE_EXEC, "Executive viewer"),
+    ]
+
+    SCOPE_GLOBAL = "global"
+    SCOPE_COMPANY = "company"
+    SCOPE_SITE = "site"
+    SCOPE_DEPARTMENT = "department"
+    SCOPE_EMPLOYEE = "employee"
+    SCOPE_CHOICES = [
+        (SCOPE_GLOBAL, "Global"),
+        (SCOPE_COMPANY, "Company"),
+        (SCOPE_SITE, "Site"),
+        (SCOPE_DEPARTMENT, "Department"),
+        (SCOPE_EMPLOYEE, "Employee"),
+    ]
+
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT,
+                             related_name="role_assignments")
+    role = models.CharField(max_length=16, choices=ROLE_CHOICES)
+    scope = models.CharField(max_length=16, choices=SCOPE_CHOICES)
+    company = models.ForeignKey(Company, null=True, blank=True, on_delete=models.PROTECT)
+    site = models.ForeignKey(OrganizationSite, null=True, blank=True, on_delete=models.PROTECT)
+    department = models.ForeignKey(Department, null=True, blank=True, on_delete=models.PROTECT)
+    employee = models.ForeignKey(EmployeeProfile, null=True, blank=True, on_delete=models.PROTECT)
+    is_active = models.BooleanField(default=True)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True,
+                                   on_delete=models.PROTECT,
+                                   related_name="+")
+    revoked_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True,
+                                   on_delete=models.PROTECT, related_name="+")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                condition=(
+                    Q(scope="global", company__isnull=True, site__isnull=True,
+                      department__isnull=True, employee__isnull=True)
+                    | Q(scope="company", company__isnull=False, site__isnull=True,
+                        department__isnull=True, employee__isnull=True)
+                    | Q(scope="site", company__isnull=False, site__isnull=False,
+                        department__isnull=True, employee__isnull=True)
+                    | Q(scope="department", company__isnull=False, site__isnull=True,
+                        department__isnull=False, employee__isnull=True)
+                    | Q(scope="employee", company__isnull=False, site__isnull=True,
+                        department__isnull=True, employee__isnull=False)
+                ),
+                name="role_assignment_valid_scope",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(role="admin", scope="global")
+                    | Q(role="hr", scope__in=["company", "site", "department", "employee"])
+                    | Q(role="exec", scope__in=["company", "site", "department"])
+                ),
+                name="role_assignment_valid_role_scope",
+            ),
+            models.UniqueConstraint(
+                fields=["user", "role"],
+                condition=Q(is_active=True, scope="global"),
+                name="uniq_active_global_role_assignment",
+            ),
+            models.UniqueConstraint(
+                fields=["user", "role", "company"],
+                condition=Q(is_active=True, scope="company"),
+                name="uniq_active_company_role_assignment",
+            ),
+            models.UniqueConstraint(
+                fields=["user", "role", "site"],
+                condition=Q(is_active=True, scope="site"),
+                name="uniq_active_site_role_assignment",
+            ),
+            models.UniqueConstraint(
+                fields=["user", "role", "department"],
+                condition=Q(is_active=True, scope="department"),
+                name="uniq_active_department_role_assignment",
+            ),
+            models.UniqueConstraint(
+                fields=["user", "role", "employee"],
+                condition=Q(is_active=True, scope="employee"),
+                name="uniq_active_employee_role_assignment",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["user", "role", "is_active"], name="role_assign_user_act_idx"),
+        ]
+
+    def clean(self):
+        from django.core.exceptions import ValidationError
+
+        if self.role == self.ROLE_ADMIN and self.scope != self.SCOPE_GLOBAL:
+            raise ValidationError({"scope": "نقش مدیر سامانه فقط می‌تواند سراسری باشد"})
+        if self.role in {self.ROLE_HR, self.ROLE_EXEC} and self.scope == self.SCOPE_GLOBAL:
+            raise ValidationError({"scope": "نقش HR و گزارش‌خوان باید محدوده سازمانی داشته باشد"})
+        if self.scope == self.SCOPE_SITE and self.site_id and self.company_id != self.site.company_id:
+            raise ValidationError({"site": "سایت باید متعلق به شرکت انتخاب‌شده باشد"})
+        if (self.scope == self.SCOPE_DEPARTMENT and self.department_id
+                and self.company_id != self.department.company_id):
+            raise ValidationError({"department": "دپارتمان باید متعلق به شرکت انتخاب‌شده باشد"})
+        if (self.scope == self.SCOPE_EMPLOYEE and self.employee_id
+                and self.company_id != self.employee.company_id):
+            raise ValidationError({"employee": "کارمند باید متعلق به شرکت انتخاب‌شده باشد"})
+        if self.role == self.ROLE_EXEC and self.scope == self.SCOPE_EMPLOYEE:
+            raise ValidationError({"scope": "گزارش‌خوان فقط می‌تواند محدوده تجمیعی داشته باشد"})
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        return super().save(*args, **kwargs)
+
+
 class WorkPattern(models.Model):
     name = models.CharField(max_length=120)
     company = models.ForeignKey(Company, on_delete=models.PROTECT, related_name="work_patterns")

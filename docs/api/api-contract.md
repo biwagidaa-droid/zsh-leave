@@ -51,7 +51,16 @@ These same-origin endpoints use Django session cookies and match the frontend HT
 
 Sessions expire after eight hours and are browser-session cookies. Session cookies are HttpOnly and SameSite=Lax; production cookies require HTTPS. Passwords are stored with Argon2, while existing PBKDF2 hashes remain verifiable and upgrade on successful authentication. Password reset and account provisioning are not exposed by this API.
 
-The `roles` and organization fields in the user response are frontend display/route metadata derived from existing Django superuser/group and employee-profile data. They are not an authorization system; backend permission enforcement remains a separate phase.
+The `roles` and organization fields in the user response are display/route metadata resolved from the backend authorization context. Actual API access is independently enforced server-side and never trusts frontend roles.
+
+### RBAC administration
+
+| Method | Endpoint | Contract |
+|---|---|---|
+| GET/POST | `/api/v1/admin/role-assignments/` | System-administrator only. Lists active assignments or creates one using `{ "userId", "role", "scope", "companyId?", "siteId?", "departmentId?", "employeeId?" }`. Only HR, admin, and executive roles are assignable; admin must be global, HR must have an explicit supported scope, and executive scopes cannot target one employee. Unknown fields and self-assignment are rejected. |
+| DELETE | `/api/v1/admin/role-assignments/{id}/` | System-administrator only. Soft-revokes an assignment and writes an audit event. Self-revocation is rejected; unknown/inactive IDs return 404. |
+
+Grants and revocations are audited and take effect on the next request. Existing HR/Executive Django groups are migrated only when an employee/company mapping exists; group membership alone is not authorization.
 
 ### `GET /api/v1/calendar/convert-date/`
 - Status: Implemented (Phase 06 foundation)
@@ -71,20 +80,20 @@ The `roles` and organization fields in the user response are frontend display/ro
 
 ### Phase 06 operational calendar APIs
 
-All data-bearing endpoints require the configured authenticated session. Management APIs are currently restricted to Django superusers; this is a temporary least-privilege boundary, not the final HR/organization RBAC model.
+All data-bearing endpoints require the configured authenticated session. Every endpoint below applies server-side role and organization-scope checks; frontend route guards are not security controls.
 
 | Method | Endpoint | Contract |
 |---|---|---|
-| GET | `/api/v1/calendar/events/?from=YYYY-MM-DD&to=YYYY-MM-DD&scope=me\|team\|org` | Calendar events; team is limited to direct reports in the same company; `org` requires Django group `HR` and an employee profile and is limited to that profile's company. Cross-company HR scope is not implemented. |
+| GET | `/api/v1/calendar/events/?from=YYYY-MM-DD&to=YYYY-MM-DD&scope=me\|team\|org` | Calendar events; `me` is personal, `team` uses the request manager snapshot, and `org` requires active HR assignment(s) and returns only their company/site/department/employee scopes. |
 | GET | `/api/v1/calendar/holidays/?from=YYYY-MM-DD&to=YYYY-MM-DD` | Active range holidays applicable to the authenticated employee's national, organization, company, and site scopes. |
-| GET | `/api/v1/working-days/estimate?employee={id}&start=YYYY-MM-DD&end=YYYY-MM-DD` | Backend day-count estimate; an employee can query only their own profile unless superuser. |
-| GET/POST | `/api/v1/calendar/work-patterns/` | Read effective patterns for own profile; create a validated pattern as superuser. |
-| GET/POST | `/api/v1/calendar/policies/` | Read effective policy for own profile (optional `date`); create immutable policy version as superuser. |
-| GET/POST | `/api/v1/calendar/holidays/manage/` | List or create range-based holidays; superuser-only. |
-| PATCH/DELETE | `/api/v1/calendar/holidays/manage/{id}/` | Edit or logically deactivate; deactivation requires a reason and writes history/audit. |
-| GET | `/api/v1/calendar/holidays/manage/{id}/history/` | Holiday history; superuser-only. |
-| GET | `/api/v1/admin/calendar/work-patterns/` | Work-pattern history; superuser-only. |
-| GET | `/api/v1/admin/calendar/policies/` | Policy-version history; superuser-only. |
+| GET | `/api/v1/working-days/estimate?employee={id}&start=YYYY-MM-DD&end=YYYY-MM-DD` | Backend day-count estimate; employees may query themselves, managers their current direct reports, and HR only assigned scope. Other employee IDs return 404. |
+| GET/POST | `/api/v1/calendar/work-patterns/` | Read effective patterns for own profile; create a validated pattern with system-configuration permission. |
+| GET/POST | `/api/v1/calendar/policies/` | Read effective policy for own profile (optional `date`); create immutable policy version with system-configuration permission. |
+| GET/POST | `/api/v1/calendar/holidays/manage/` | List or create range-based holidays; requires system-configuration permission. |
+| PATCH/DELETE | `/api/v1/calendar/holidays/manage/{id}/` | Edit or logically deactivate; deactivation requires a reason and writes history/audit. Requires system-configuration permission. |
+| GET | `/api/v1/calendar/holidays/manage/{id}/history/` | Holiday history; requires system-configuration permission. |
+| GET | `/api/v1/admin/calendar/work-patterns/` | Work-pattern history; requires system-configuration permission. |
+| GET | `/api/v1/admin/calendar/policies/` | Policy-version history; requires system-configuration permission. |
 
 Dates in these contracts are Gregorian ISO dates. Jalali entry/display belongs to the presentation layer; backend remains authoritative for validation and workday calculations. Workday and policy configuration is required: missing configuration returns a conflict rather than silently using a guessed default.
 
@@ -95,7 +104,7 @@ The legacy `/api/v1/holidays/` API remains available for one-day Jalali `PublicH
 - `GET /api/v1/docs/` — Implemented via Swagger UI
 
 ## 4. Planned but Unimplemented
-- HR role and company/site/department scoped permission management
+- Leave request/approval APIs using the implemented scoped selectors and object-level permission engine
 - Frontend management screens for range holidays, work patterns, and policy versions
 - backend-authoritative hourly leave calculations tied to work patterns and holidays
 - leave-year configuration, rollover, expiry, and their ledger operations

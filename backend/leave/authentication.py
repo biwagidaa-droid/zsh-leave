@@ -10,6 +10,7 @@ from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.throttling import AnonRateThrottle
 
+from .authorization import authorization_context
 from .models import AuditEvent, EmployeeProfile
 
 logger = logging.getLogger("leave.auth")
@@ -48,6 +49,7 @@ def _csrf_error(request):
 
 
 def _user_payload(user):
+    authorization = authorization_context(user)
     profile = (
         EmployeeProfile.objects.select_related(
             "company", "department", "manager__user"
@@ -55,19 +57,10 @@ def _user_payload(user):
         .filter(user=user)
         .first()
     )
-    group_names = set(user.groups.values_list("name", flat=True))
-    roles = []
-    if user.is_superuser:
-        roles.append("admin")
-    if "HR" in group_names:
-        roles.append("hr")
-    if "Exec" in group_names or "Executive" in group_names:
-        roles.append("exec")
-    if profile is not None:
-        if profile.is_employee:
-            roles.append("employee")
-        if profile.direct_reports.exists():
-            roles.append("manager")
+    roles = [
+        role for role in ("admin", "hr", "exec", "employee", "manager")
+        if authorization.has_role(role)
+    ]
 
     display_name = user.get_full_name().strip() or user.username
     manager_name = None

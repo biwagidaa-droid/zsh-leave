@@ -5,8 +5,10 @@ import datetime as dt
 from decimal import Decimal
 
 from django.db import transaction
+from django.utils import timezone
 
 from zsh_core import workflow as wf
+from .authorization import HR, authorization_context, can_decide_leave_request, scoped_leave_requests
 from .calendar_services import calculate_working_days, resolve_policy_version
 from .models import (AuditEvent, EmployeeProfile, LeaveRequest, LeaveRequestEvent, LeaveType)
 
@@ -50,17 +52,34 @@ def _validate_new(employee: EmployeeProfile, ltype: LeaveType, start, end, days:
     if ltype.requires_replacement:
         if replacement is None:
             raise wf.ValidationError("انتخاب جانشین الزامی است")
-        if replacement.pk == employee.pk or not replacement.is_employee:
+        if (replacement.pk == employee.pk or not replacement.is_employee
+                or replacement.company_id != employee.company_id):
             raise wf.ValidationError("جانشین نامعتبر است")
 
 
 @transaction.atomic
-def submit_request(*, user, role: str, employee: EmployeeProfile, leave_type: LeaveType,
+def submit_request(*, user, employee: EmployeeProfile, leave_type: LeaveType,
                    start, end, working_days: Decimal | None = None, reason: str = "",
                    replacement: EmployeeProfile | None = None,
                    manager_away: bool = False, policy_allow_past: bool = False) -> LeaveRequest:
     # قفل ردیف کارمند: ثبت‌های هم‌زمان یک کارمند سریالی می‌شوند (جلوگیری از هم‌پوشانی)
-    EmployeeProfile.objects.select_for_update().get(pk=employee.pk)
+    employee = EmployeeProfile.objects.select_for_update().select_related(
+        "company", "site", "department", "manager",
+    ).get(pk=employee.pk)
+    context = authorization_context(user)
+    if context.employee_id == employee.pk:
+        role = wf.EMPLOYEE
+    elif context.has_scope(
+        HR,
+        company_id=employee.company_id,
+        site_id=employee.site_id,
+        department_id=employee.department_id,
+        employee_id=employee.pk,
+    ):
+        role = wf.HR
+    else:
+        raise wf.PermissionDenied("کاربر مجوز ثبت درخواست برای این کارمند را ندارد")
+
     policy_version = resolve_policy_version(employee, start)
     calculation = calculate_working_days(
         employee=employee, start=start, end=end, policy_version=policy_version,
@@ -89,8 +108,27 @@ def submit_request(*, user, role: str, employee: EmployeeProfile, leave_type: Le
 
 
 @transaction.atomic
-def apply_event(*, request_id: int, user, role: str, event: str, reason: str = "") -> LeaveRequest:
-    req = LeaveRequest.objects.select_for_update().select_related("leave_type").get(pk=request_id)
+def apply_event(*, request_id: int, user, event: str, reason: str = "") -> LeaveRequest:
+    context = authorization_context(user)
+    req = scoped_leave_requests(context).select_for_update().select_related(
+        "employee__company", "employee__site", "employee__department", "leave_type",
+    ).get(pk=request_id)
+    if req.employee_id == context.employee_id:
+        role = wf.EMPLOYEE
+    elif context.has_scope(
+        HR,
+        company_id=req.employee.company_id,
+        site_id=req.employee.site_id,
+        department_id=req.employee.department_id,
+        employee_id=req.employee_id,
+    ):
+        role = wf.HR
+    elif req.manager_snapshot_id == context.employee_id:
+        role = wf.MANAGER
+    else:
+        raise LeaveRequest.DoesNotExist
+    if role == wf.MANAGER and not can_decide_leave_request(context, req):
+        raise wf.PermissionDenied("مدیر مجوز تصمیم‌گیری برای این درخواست را ندارد")
     in_flight = req.amendments.exclude(status__in=[wf.REJECTED, wf.CANCELLED]).exists()
     ctx = wf.Context(actor=role, reason=reason, confidential=req.leave_type.confidential,
                      amendment_in_flight=in_flight)

@@ -5,7 +5,7 @@ This document captures the current backend posture and distinguishes the approve
 
 ## 2. Security Areas
 - Authentication: Session login, logout, current-user, and password-change APIs are implemented. The API enforces CSRF on state-changing authentication requests, rotates session/CSRF keys at login, invalidates the session at logout, and throttles login attempts. Password reset/provisioning and complete authorization remain out of scope.
-- Authorization: Endpoint-specific checks exist for the calendar foundation. The organization calendar currently requires Django group `HR` plus an employee profile and is restricted to that profile's company. This is not a complete RBAC or organization-scope implementation; Phase 03 remains required.
+- Authorization: Centralized server-side RBAC is implemented with persisted, audited `RoleAssignment` records, company/site/department/employee scopes, scoped ORM selectors, and object-level leave visibility/decision policy. Calendar and configuration endpoints use the shared engine; frontend role checks are UX only. Leave workflow APIs are not implemented yet and must enforce the same policy.
 - CSRF: Enabled in Django settings; the SPA bootstraps a CSRF cookie through `/auth/me`. Production cross-origin deployments must configure `ZSH_CSRF_TRUSTED_ORIGINS` and retain HTTPS.
 - CORS: Not yet configured explicitly; require approved frontend origin list in production.
 - Rate Limiting: Login has an active DRF anonymous throttle of 5 attempts/minute per client IP. Production deployments should configure a shared cache backend for consistent multi-worker limits.
@@ -26,5 +26,5 @@ This document captures the current backend posture and distinguishes the approve
 ## 3. Phase Allocation
 - Phase 00-02: settings hardening, environment separation, health/readiness, structured logging, migration baseline
 - Phase B: authentication endpoints, CSRF/session lifecycle, password security, and frontend session integration
-- Later authorization phase: RBAC, organization scopes, password reset/provisioning, and comprehensive audit retention
+- Remaining authorization lifecycle: password reset/provisioning and comprehensive audit retention
 - Later phases: attachment handling, media validation, comprehensive audit and log retention policies

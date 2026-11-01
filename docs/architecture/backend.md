@@ -41,9 +41,11 @@ The current backend is intentionally a thin Django application over a domain-fir
 - Infrastructure errors are surfaced by health/readiness checks without leaking secrets.
 
 ## 7. Security and Observability
+- `backend/leave/authorization.py` resolves server-side role, operation, organization-scope, queryset, and object-level permissions; frontend role metadata is not authoritative.
+- Role grants and revocations are transactional, audited application services exposed only to system administrators.
 - Environment variables carry secrets and configuration values.
 - Secrets are never embedded in the repository.
 - Logs are structured but intentionally avoid credentials, tokens, and medical details.
 
 ## 8. Future Scaling
-This foundation supports later feature work such as RBAC, approval graph, and more complete reporting without forcing a rewrite of the domain engine. Session authentication is implemented separately from those authorization features.
+This foundation supports later feature work such as the approval graph and complete reporting without forcing a rewrite of the domain engine. Session authentication and centralized RBAC are implemented; leave workflow APIs and broader account lifecycle remain future work.

@@ -12,6 +12,20 @@ from rest_framework.response import Response
 from zsh_core import holidays as holiday_rules
 from zsh_core import jalali
 from . import admin_services
+from .authorization import (
+    MANAGE_SYSTEM_CONFIGURATION,
+    READ_COMPANY_CALENDAR,
+    READ_PERSONAL_CALENDAR,
+    READ_TEAM_CALENDAR,
+    READ_WORKDAY_ESTIMATE,
+    READ_WORK_PATTERNS,
+    READ_LEAVE_POLICY,
+    authorization_context,
+    has_permission,
+    scoped_employees,
+    scoped_hr_leave_requests,
+    scoped_leave_requests,
+)
 from .calendar_services import (
     CalendarConfigurationError,
     _patterns_for,
@@ -76,7 +90,7 @@ def _employee_for(user) -> EmployeeProfile | None:
 
 
 def _is_admin(user) -> bool:
-    return bool(user.is_authenticated and user.is_superuser)
+    return has_permission(authorization_context(user), MANAGE_SYSTEM_CONFIGURATION)
 
 
 def _calendar_holiday_json(holiday: CalendarHoliday) -> dict:
@@ -139,28 +153,25 @@ def calendar_events(request):
         return _failure("invalid_range", str(exc), 400)
 
     scope = request.query_params.get("scope", "me")
-    employee = _employee_for(request.user)
+    context = authorization_context(request.user)
+    employee = context.employee
     if scope == "org":
-        if not employee or not request.user.groups.filter(name="HR").exists():
+        if not has_permission(context, READ_COMPANY_CALENDAR):
             return _failure("permission_denied", "دسترسی تقویم سازمانی مجاز نیست", 403)
-        requests = LeaveRequest.objects.filter(
-            employee__company_id=employee.company_id,
+        requests = scoped_hr_leave_requests(context).filter(
             status="APPROVED",
         )
     elif scope == "team":
-        if not employee:
+        if not has_permission(context, READ_TEAM_CALENDAR):
             return _failure("employee_profile_required", "پرونده کارمندی برای کاربر ثبت نشده است", 403)
-        report_ids = EmployeeProfile.objects.filter(
-            manager=employee, company_id=employee.company_id, is_employee=True,
-        ).values_list("pk", flat=True)
-        requests = LeaveRequest.objects.filter(
-            employee_id__in=report_ids, status="APPROVED",
+        requests = scoped_leave_requests(context).filter(
+            manager_snapshot_id=context.employee_id, status="APPROVED",
         )
     elif scope == "me":
-        if not employee:
+        if not has_permission(context, READ_PERSONAL_CALENDAR):
             return _failure("employee_profile_required", "پرونده کارمندی برای کاربر ثبت نشده است", 403)
         requests = LeaveRequest.objects.filter(
-            employee=employee,
+            employee_id=context.employee_id,
             status__in=["PENDING", "ESCALATED", "APPROVED", "WITHDRAWAL_PENDING"],
         )
     else:
@@ -251,19 +262,24 @@ def estimate_working_days(request):
     except ValueError as exc:
         return _failure("invalid_range", str(exc), 400)
 
-    employee = _employee_for(request.user)
     requested_id = request.query_params.get("employee")
-    if requested_id and (not employee or requested_id != str(employee.pk)):
-        if not _is_admin(request.user):
-            return _failure("permission_denied", "فقط مدیرکل سامانه می‌تواند کارمند دیگری را انتخاب کند", 403)
+    context = authorization_context(request.user)
+    if requested_id:
         try:
-            employee = EmployeeProfile.objects.select_related(
-                "company", "site", "department", "user",
-            ).get(pk=requested_id, is_employee=True)
-        except (EmployeeProfile.DoesNotExist, ValueError):
+            requested_pk = int(requested_id)
+        except ValueError:
             raise Http404
+        employee = scoped_employees(context).select_related(
+            "company", "site", "department", "user",
+        ).filter(pk=requested_pk).first()
+        if employee is None:
+            raise Http404
+    else:
+        employee = context.employee
     if not employee:
         return _failure("employee_profile_required", "پرونده کارمندی برای کاربر ثبت نشده است", 403)
+    if not has_permission(context, READ_WORKDAY_ESTIMATE, employee_id=employee.pk):
+        raise Http404
     try:
         calculation = calculate_working_days(employee=employee, start=start, end=end)
     except CalendarConfigurationError as exc:
@@ -281,8 +297,9 @@ def estimate_working_days(request):
 @api_view(["GET", "POST"])
 def work_patterns(request):
     if request.method == "GET":
-        employee = _employee_for(request.user)
-        if not employee:
+        context = authorization_context(request.user)
+        employee = context.employee
+        if not has_permission(context, READ_WORK_PATTERNS):
             return _failure("employee_profile_required", "پرونده کارمندی برای کاربر ثبت نشده است", 403)
         try:
             start, end = _date_range(request.query_params, "from", "to")
@@ -328,8 +345,9 @@ def work_patterns(request):
 @api_view(["GET", "POST"])
 def leave_policies(request):
     if request.method == "GET":
-        employee = _employee_for(request.user)
-        if not employee:
+        context = authorization_context(request.user)
+        employee = context.employee
+        if not has_permission(context, READ_LEAVE_POLICY):
             return _failure("employee_profile_required", "پرونده کارمندی برای کاربر ثبت نشده است", 403)
         try:
             on_date = _parse_date(request.query_params.get("date"), "date") if request.query_params.get("date") else timezone.localdate()

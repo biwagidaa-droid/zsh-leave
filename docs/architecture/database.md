@@ -19,6 +19,8 @@ erDiagram
     EmployeeProfile ||--o{ PublicHoliday : creates
     PublicHoliday ||--o{ PublicHolidayHistory : tracks
     User ||--o{ EmployeeProfile : profile
+    User ||--o{ RoleAssignment : receives
+    Company ||--o{ RoleAssignment : scopes
     User ||--o{ SystemSetting : updates
 ```
 
@@ -26,6 +28,7 @@ erDiagram
 - Company: legal entity / company boundary within the holding
 - Department: hierarchical department or unit boundary
 - EmployeeProfile: employee status and direct manager linkage
+- RoleAssignment: active, auditable HR/admin/executive role and organization scope
 - LeaveType: configurable leave category and operational behavior
 - LeaveEntitlement: annual or policy-bounded leave allocation
 - EntitlementEvent: append-only entitlement history
@@ -45,9 +48,7 @@ erDiagram
 - Time zones are stored in UTC internally while using Asia/Tehran for local reporting.
 
 ## 5. Nice-to-have Future Entities
-- Site / WorkLocation
 - OrganizationalUnit
-- Role / Permission / RoleAssignment
 - EmploymentContract
 - WorkSchedule
 - BackgroundJob
@@ -55,7 +56,7 @@ erDiagram
 - Attachment
 - Comment
 
-These are intentionally documented as future architecture dependencies, not forced into the current migration set.
+These are intentionally documented as future architecture dependencies, not forced into the current migration set. Company, site, department, employee scopes and role assignments are now present; richer unit hierarchies remain future work.
 
 ## 6. Constraints and Safety
 - Avoid cascade deletes on employee and organizational records.

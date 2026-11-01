@@ -2,13 +2,11 @@ import datetime as dt
 from decimal import Decimal
 
 from django.contrib.auth import get_user_model
-from django.contrib.auth.models import Group
 from django.core.exceptions import ValidationError
 from django.test import TestCase
 from rest_framework.test import APIClient
 
 from zsh_core import settings_schema
-from zsh_core.workflow import EMPLOYEE
 from leave.calendar_services import (
     CalendarConfigurationError,
     calculate_working_days,
@@ -28,6 +26,7 @@ from leave.models import (
     LeaveType,
     OrganizationSite,
     PublicHoliday,
+    RoleAssignment,
 )
 from leave.services import submit_request
 
@@ -173,7 +172,7 @@ class CalendarServiceTests(TestCase):
             key="annual", label_fa="استحقاقی", employee_requestable=True, requires_approval=True,
         )
         request = submit_request(
-            user=self.user, role=EMPLOYEE, employee=self.employee, leave_type=leave_type,
+            user=self.user, employee=self.employee, leave_type=leave_type,
             start=dt.date(2026, 11, 2), end=dt.date(2026, 11, 2),
         )
         self.assertEqual(request.working_days, Decimal("1"))
@@ -194,7 +193,7 @@ class CalendarServiceTests(TestCase):
         )
 
         request = submit_request(
-            user=self.user, role=EMPLOYEE, employee=self.employee, leave_type=leave_type,
+            user=self.user, employee=self.employee, leave_type=leave_type,
             start=dt.date(2026, 11, 23), end=dt.date(2026, 11, 23),
         )
 
@@ -265,8 +264,12 @@ class CalendarApiTests(TestCase):
         self.assertEqual(response.status_code, 403)
 
     def test_hr_org_calendar_is_limited_to_hr_employee_company(self):
-        hr_group = Group.objects.create(name="HR")
-        self.other_user.groups.add(hr_group)
+        RoleAssignment.objects.create(
+            user=self.other_user,
+            role=RoleAssignment.ROLE_HR,
+            scope=RoleAssignment.SCOPE_COMPANY,
+            company=self.company_a,
+        )
         company_b_user = get_user_model().objects.create_user(
             username="company-b-worker", password="test-password",
         )
