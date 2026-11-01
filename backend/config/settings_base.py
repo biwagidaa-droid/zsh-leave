@@ -1,4 +1,5 @@
 import os
+from ipaddress import ip_network
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -15,6 +16,11 @@ def env(name: str, default: str | None = None, required: bool = False) -> str:
 SECRET_KEY = env("ZSH_SECRET_KEY", "dev-only-secret-key-change-me")
 DEBUG = env("ZSH_DEBUG", "0").lower() in {"1", "true", "yes", "on"}
 ALLOWED_HOSTS = [host.strip() for host in env("ZSH_ALLOWED_HOSTS", "localhost,127.0.0.1").split(",") if host.strip()]
+ZSH_TRUSTED_PROXY_NETWORKS = tuple(
+    ip_network(value.strip(), strict=False)
+    for value in env("ZSH_TRUSTED_PROXY_IPS", "").split(",")
+    if value.strip()
+)
 
 INSTALLED_APPS = [
     "django.contrib.admin",
@@ -132,6 +138,14 @@ MEDIA_ROOT = BASE_DIR / "media"
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 REST_FRAMEWORK = {
+    "DEFAULT_THROTTLE_CLASSES": [
+        "leave.throttling.AnonymousClientThrottle",
+        "leave.throttling.AuthenticatedUserThrottle",
+        "leave.throttling.AuthenticatedClientThrottle",
+        "leave.throttling.ScopedClientThrottle",
+        "leave.throttling.ScopedUserThrottle",
+        "leave.throttling.LoginAccountThrottle",
+    ],
     "DEFAULT_AUTHENTICATION_CLASSES": [
         "leave.authentication_classes.SessionAuthentication",
     ],
@@ -141,10 +155,21 @@ REST_FRAMEWORK = {
     "DEFAULT_THROTTLE_RATES": {
         "user": "120/min",
         "anon": "20/min",
+        "authenticated_client": "120/min",
         "auth_login": "5/min",
+        "auth_login_account": "5/min",
         "activation": "5/min",
         "employee_invitation": "10/hour",
+        "password_operation": "5/hour",
+        "password_reset": "5/hour",
+        "employee_search": "60/min",
+        "bulk_import": "5/hour",
+        "expensive_operation": "10/min",
+        "file_upload": "10/hour",
+        "file_access": "30/min",
     },
+    "EXCEPTION_HANDLER": "leave.throttling.rate_limit_exception_handler",
+    "NUM_PROXIES": 0,
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
 }
 

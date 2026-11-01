@@ -5,20 +5,16 @@ from django.contrib.auth import password_validation, update_session_auth_hash
 from django.core.exceptions import ValidationError
 from django.middleware.csrf import CsrfViewMiddleware, get_token
 from rest_framework import status
-from rest_framework.decorators import api_view, permission_classes, throttle_classes
+from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
-from rest_framework.throttling import AnonRateThrottle
 
 from .authorization import authorization_context
 from .invitation_services import account_access_allowed
 from .models import AuditEvent, EmployeeProfile
+from .throttling import rate_limited
 
 logger = logging.getLogger("leave.auth")
-
-
-class LoginRateThrottle(AnonRateThrottle):
-    scope = "auth_login"
 
 
 def _record_auth_event(action, entity_id, actor=None, result="ok"):
@@ -95,9 +91,9 @@ def _invalid_request(fields):
     )
 
 
+@rate_limited("auth_login")
 @api_view(["POST"])
 @permission_classes([AllowAny])
-@throttle_classes([LoginRateThrottle])
 def login(request):
     csrf_response = _csrf_error(request)
     if csrf_response is not None:
@@ -154,6 +150,7 @@ def current_user(request):
     return Response(_user_payload(request.user))
 
 
+@rate_limited("password_operation")
 @api_view(["POST"])
 def change_password(request):
     csrf_response = _csrf_error(request)

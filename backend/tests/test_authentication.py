@@ -257,6 +257,11 @@ class ProductionAuthenticationSettingsTests(TestCase):
         self.assertTrue(settings_prod.SESSION_COOKIE_SECURE)
         self.assertTrue(settings_prod.CSRF_COOKIE_SECURE)
         self.assertTrue(settings_prod.SECURE_SSL_REDIRECT)
+        self.assertEqual(
+            settings_prod.CACHES["default"]["BACKEND"],
+            "django.core.cache.backends.db.DatabaseCache",
+        )
+        self.assertEqual(settings_prod.CACHES["default"]["LOCATION"], "zsh_cache")
         with patch.dict(os.environ, {
             "ZSH_SECRET_KEY": "x" * 50,
             "ZSH_DB_PASSWORD": "safe-test-password",

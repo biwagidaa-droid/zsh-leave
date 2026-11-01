@@ -4,6 +4,7 @@ import tempfile
 from decimal import Decimal
 
 from django.contrib.auth import get_user_model
+from django.core.cache import cache
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.core.exceptions import PermissionDenied
 from django.test import TestCase, override_settings
@@ -32,6 +33,7 @@ from leave.models import (
 
 class FrontendApiTests(TestCase):
     def setUp(self):
+        cache.clear()
         user_model = get_user_model()
         self.company = Company.objects.create(code="FRONTEND", name="Frontend company")
         self.department = Department.objects.create(

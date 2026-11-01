@@ -50,6 +50,7 @@ from .models import (
     RoleAssignment,
     SystemSetting,
 )
+from .throttling import rate_limited
 
 User = get_user_model()
 
@@ -312,6 +313,7 @@ def _import_preview(csv_text: str, context) -> tuple[dict, list[tuple]]:
         return {"dryRun": True, "rows": [], "accepted": 0, "rejected": 1}, []
 
 
+@rate_limited("bulk_import")
 @api_view(["POST"])
 def entitlement_import(request):
     context = _context(request)
@@ -350,6 +352,7 @@ def entitlement_import(request):
     return Response(preview)
 
 
+@rate_limited("employee_search")
 @api_view(["GET", "POST", "PATCH"])
 def employees(request, employee_id: int | None = None):
     context = _context(request)
@@ -691,6 +694,7 @@ def notification_read(request, notification_id: int):
     return Response(status=204)
 
 
+@rate_limited("expensive_operation")
 @api_view(["GET"])
 def coverage(request):
     context = _context(request)
@@ -730,6 +734,7 @@ def coverage(request):
     return Response(result)
 
 
+@rate_limited("expensive_operation")
 @api_view(["GET"])
 def reports(request, kind: str):
     context = _context(request)
@@ -885,6 +890,7 @@ def contracts(request, employee_id: int):
     return Response(_contract_json(item), status=201)
 
 
+@rate_limited("file_upload")
 @api_view(["GET", "POST"])
 def request_attachments(request, request_id: int):
     from .workflow_views import _comment_allowed, _visible_request
@@ -933,6 +939,7 @@ def request_attachments(request, request_id: int):
     }, status=201)
 
 
+@rate_limited("file_access")
 @api_view(["GET"])
 def request_attachment_download(request, request_id: int, attachment_id: int):
     from .workflow_views import _comment_allowed, _visible_request

@@ -1,10 +1,9 @@
 from django.db import IntegrityError
 from django.http import Http404
 from rest_framework import status
-from rest_framework.decorators import api_view, permission_classes, throttle_classes
+from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
-from rest_framework.throttling import AnonRateThrottle, UserRateThrottle
 
 from .authorization import authorization_context, hr_operation_employees
 from .invitation_services import (
@@ -16,14 +15,7 @@ from .invitation_services import (
     synchronize_employment_access,
 )
 from .models import EmployeeProfile
-
-
-class ActivationRateThrottle(AnonRateThrottle):
-    scope = "activation"
-
-
-class EmployeeInvitationRateThrottle(UserRateThrottle):
-    scope = "employee_invitation"
+from .throttling import rate_limited
 
 
 def _employee_for_operator(request, employee_id: int) -> EmployeeProfile:
@@ -40,8 +32,8 @@ def _employee_for_operator(request, employee_id: int) -> EmployeeProfile:
         raise Http404 from exc
 
 
+@rate_limited("employee_invitation")
 @api_view(["POST"])
-@throttle_classes([EmployeeInvitationRateThrottle])
 def employee_invitation(request, employee_id: int):
     try:
         employee = _employee_for_operator(request, employee_id)
@@ -88,9 +80,9 @@ def employee_invitation(request, employee_id: int):
     )
 
 
+@rate_limited("activation")
 @api_view(["POST"])
 @permission_classes([AllowAny])
-@throttle_classes([ActivationRateThrottle])
 def activate_account(request):
     data = request.data
     if (
@@ -127,8 +119,8 @@ def activate_account(request):
     )
 
 
+@rate_limited("employee_invitation")
 @api_view(["POST"])
-@throttle_classes([EmployeeInvitationRateThrottle])
 def revoke_employee_invitation(request, employee_id: int):
     try:
         employee = _employee_for_operator(request, employee_id)
@@ -144,8 +136,8 @@ def revoke_employee_invitation(request, employee_id: int):
     )
 
 
+@rate_limited("employee_invitation")
 @api_view(["POST"])
-@throttle_classes([EmployeeInvitationRateThrottle])
 def suspend_employee_account(request, employee_id: int):
     try:
         employee = _employee_for_operator(request, employee_id)

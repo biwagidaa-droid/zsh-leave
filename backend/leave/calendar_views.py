@@ -37,6 +37,7 @@ from .calendar_services import (
     resolve_policy_version,
     update_calendar_holiday,
 )
+from .throttling import rate_limited
 from .models import (
     CalendarHoliday,
     CalendarHolidayHistory,
@@ -248,6 +249,7 @@ def calendar_holidays(request):
     return Response(result)
 
 
+@rate_limited("expensive_operation")
 @api_view(["GET"])
 def estimate_working_days(request):
     start_value = request.query_params.get("start")
