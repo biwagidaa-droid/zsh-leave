@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import csv
 import datetime as dt
-import io
 from decimal import Decimal, InvalidOperation
 from uuid import uuid4
 
@@ -25,11 +23,14 @@ from .authorization import (
     scoped_employees, scoped_hr_employees, scoped_hr_leave_requests,
 )
 from .entitlement_services import (
+    EntitlementConflict,
     EntitlementLedgerError,
     adjust_entitlement,
     create_entitlement,
+    create_entitlement_for_import,
     entitlement_balance,
 )
+from .entitlement_import_services import validate_entitlement_import
 from .employment_services import (
     employees_employed_on,
     employment_status_history,
@@ -300,55 +301,6 @@ def entitlement_adjustment(request, entitlement_id: int):
     return Response(_entitlement_json(item))
 
 
-def _import_preview(csv_text: str, context) -> tuple[dict, list[tuple]]:
-    try:
-        reader = csv.DictReader(io.StringIO(csv_text))
-        required = {"personnel_code", "type", "year", "days"}
-        if not reader.fieldnames or not required.issubset(reader.fieldnames):
-            return {
-                "dryRun": True,
-                "rows": [{
-                    "line": 1, "employee": "", "type": "", "year": 0,
-                    "days": "", "ok": False,
-                    "error": "سرستون‌های personnel_code,type,year,days الزامی هستند",
-                }],
-                "accepted": 0, "rejected": 1,
-            }, []
-        parsed = []
-        rows = []
-        employees = {
-            e.personnel_code: e
-            for e in hr_operation_employees(context).select_related("user", "company")
-        }
-        types = {t.key: t for t in LeaveType.objects.filter(enabled=True)}
-        for line, raw in enumerate(reader, 2):
-            code, key = (raw.get("personnel_code") or "").strip(), (raw.get("type") or "").strip()
-            try:
-                row_year = int(raw.get("year", ""))
-                days = Decimal((raw.get("days") or "").strip())
-                if not days.is_finite() or days <= 0 or days * 10 != (days * 10).to_integral_value():
-                    raise ValueError
-                employee, leave_type = employees.get(code), types.get(key)
-                if not employee or not leave_type:
-                    raise ValueError
-                if LeaveEntitlement.objects.filter(employee=employee, leave_type=leave_type, year=row_year).exists():
-                    raise ValueError
-                parsed.append((line, employee, leave_type, row_year, days))
-                rows.append({"line": line, "employee": employee.user.get_full_name() or employee.user.username,
-                             "type": leave_type.key, "year": row_year, "days": str(days), "ok": True})
-            except (ValueError, TypeError, InvalidOperation):
-                rows.append({"line": line, "employee": code, "type": key, "year": 0,
-                             "days": raw.get("days", ""), "ok": False,
-                             "error": "اطلاعات یا دسترسی این ردیف معتبر نیست"})
-        return {
-            "dryRun": True, "rows": rows,
-            "accepted": sum(row["ok"] for row in rows),
-            "rejected": sum(not row["ok"] for row in rows),
-        }, parsed
-    except csv.Error:
-        return {"dryRun": True, "rows": [], "accepted": 0, "rejected": 1}, []
-
-
 @rate_limited("bulk_import")
 @api_view(["POST"])
 def entitlement_import(request):
@@ -359,32 +311,87 @@ def entitlement_import(request):
     if not isinstance(data, dict) or set(data) != {"csv"} or not isinstance(data["csv"], str):
         return _failure("invalid_payload", "متن CSV الزامی است", 400)
     dry_run = request.query_params.get("dry_run") == "1"
-    preview, valid = _import_preview(data["csv"], context)
-    preview["dryRun"] = dry_run
-    if not dry_run and preview["rejected"] == 0:
-        try:
-            with transaction.atomic():
-                current_context = _context(request)
-                if not (current_context.has_role("hr") or _admin(current_context)):
-                    return _failure("permission_denied", "ورود گروهی سهمیه مجاز نیست", 403)
-                employee_ids = {employee.pk for _, employee, _, _, _ in valid}
-                current_employees = {
-                    employee.pk: employee
-                    for employee in hr_operation_employees(current_context).filter(
-                        pk__in=employee_ids,
-                    ).select_related("user", "company")
-                }
-                if set(current_employees) != employee_ids:
-                    raise EntitlementLedgerError("دامنه ورود گروهی دیگر معتبر نیست")
-                for line, employee, leave_type, year, days in valid:
-                    create_entitlement(
-                        employee=current_employees[employee.pk], leave_type=leave_type,
-                        year=year, base_days=days,
-                        actor=request.user, reason="ورود گروهی سهمیه",
+    validation = validate_entitlement_import(data["csv"], context)
+    if dry_run:
+        validation.preview["dryRun"] = True
+        return Response(validation.preview)
+
+    conflict_line = None
+    try:
+        with transaction.atomic():
+            current_context = _context(request)
+            if not (current_context.has_role("hr") or _admin(current_context)):
+                return _failure("permission_denied", "ورود گروهی سهمیه مجاز نیست", 403)
+
+            employee_ids = {employee.pk for _, employee, _, _, _ in validation.valid_rows}
+            leave_type_ids = {leave_type.pk for _, _, leave_type, _, _ in validation.valid_rows}
+            locked_employee_ids = set(
+                hr_operation_employees(current_context).filter(
+                    pk__in=employee_ids,
+                ).select_for_update().order_by("pk").values_list("pk", flat=True)
+            )
+            locked_leave_type_ids = set(
+                LeaveType.objects.filter(
+                    pk__in=leave_type_ids, enabled=True,
+                ).select_for_update().order_by("pk").values_list("pk", flat=True)
+            )
+
+            current_validation = validate_entitlement_import(data["csv"], current_context)
+            preview = current_validation.preview
+            valid = current_validation.valid_rows
+            fresh_employee_ids = {employee.pk for _, employee, _, _, _ in valid}
+            fresh_leave_type_ids = {leave_type.pk for _, _, leave_type, _, _ in valid}
+            if not fresh_employee_ids.issubset(locked_employee_ids):
+                preview["rows"].append({
+                    "line": 1, "employee": "", "type": "", "year": 0, "days": "",
+                    "ok": False, "errorCode": "stale_employee_scope",
+                    "error": "محدوده دسترسی کارمند هنگام ثبت تغییر کرده است",
+                })
+                preview["rejected"] += 1
+            if not fresh_leave_type_ids.issubset(locked_leave_type_ids):
+                preview["rows"].append({
+                    "line": 1, "employee": "", "type": "", "year": 0, "days": "",
+                    "ok": False, "errorCode": "stale_leave_type",
+                    "error": "وضعیت نوع مرخصی هنگام ثبت تغییر کرده است",
+                })
+                preview["rejected"] += 1
+            if preview["rejected"]:
+                preview["dryRun"] = False
+                return Response(preview)
+
+            for line, employee, leave_type, year, days in valid:
+                try:
+                    create_entitlement_for_import(
+                        employee=employee,
+                        leave_type=leave_type,
+                        year=year,
+                        base_days=days,
+                        actor=request.user,
+                        reason="ورود گروهی سهمیه",
                         idempotency_key=f"import:{request.user.pk}:{uuid4()}:{line}",
                     )
-        except (EntitlementLedgerError, IntegrityError) as exc:
-            return _failure("entitlement_import_failed", str(exc), 409)
+                except EntitlementConflict:
+                    conflict_line = line
+                    raise
+    except EntitlementConflict:
+        return Response({
+            "dryRun": False,
+            "rows": [{
+                "line": conflict_line,
+                "employee": "",
+                "type": "",
+                "year": 0,
+                "days": "",
+                "ok": False,
+                "errorCode": "duplicate_existing",
+                "error": "سهمیه این کارمند، نوع مرخصی و سال هم‌زمان ثبت شده است",
+            }],
+            "accepted": 0,
+            "rejected": 1,
+        }, status=409)
+    except (EntitlementLedgerError, IntegrityError) as exc:
+        return _failure("entitlement_import_failed", str(exc), 409)
+    preview["dryRun"] = False
     return Response(preview)
 
 

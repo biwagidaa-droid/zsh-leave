@@ -272,6 +272,58 @@ def create_entitlement(
     reason: str,
     idempotency_key: str,
 ) -> LeaveEntitlement:
+    return _create_entitlement(
+        employee=employee,
+        leave_type=leave_type,
+        year=year,
+        base_days=base_days,
+        carry_over_days=carry_over_days,
+        manual_adjustment=manual_adjustment,
+        actor=actor,
+        reason=reason,
+        idempotency_key=idempotency_key,
+        reject_existing=False,
+    )
+
+
+@transaction.atomic
+def create_entitlement_for_import(
+    *,
+    employee,
+    leave_type,
+    year: int,
+    base_days,
+    actor=None,
+    reason: str,
+    idempotency_key: str,
+) -> LeaveEntitlement:
+    return _create_entitlement(
+        employee=employee,
+        leave_type=leave_type,
+        year=year,
+        base_days=base_days,
+        carry_over_days=ZERO,
+        manual_adjustment=ZERO,
+        actor=actor,
+        reason=reason,
+        idempotency_key=idempotency_key,
+        reject_existing=True,
+    )
+
+
+def _create_entitlement(
+    *,
+    employee,
+    leave_type,
+    year: int,
+    base_days,
+    carry_over_days,
+    manual_adjustment,
+    actor,
+    reason: str,
+    idempotency_key: str,
+    reject_existing: bool,
+) -> LeaveEntitlement:
     _validate_key(idempotency_key)
     if not (reason or "").strip():
         raise EntitlementLedgerError("دلیل ایجاد سهمیه الزامی است")
@@ -298,6 +350,8 @@ def create_entitlement(
         ).first()
         if entitlement is None:
             raise
+        if reject_existing:
+            raise EntitlementConflict("برای این کارمند/نوع/سال قبلاً سهمیه ثبت شده است")
         balance = entitlement_balance(entitlement)
         if (
             balance["total"] == sum(amounts.values(), ZERO)
