@@ -1,6 +1,7 @@
 from .settings_base import *  # noqa F401,F403
 
 DEBUG = False
+ZSH_JOB_SCHEDULER_REQUIRED = True
 SECRET_KEY = env("ZSH_SECRET_KEY", required=True)
 if env("ZSH_INVITATION_EXPOSE_DEV_LINKS", "0").lower() in {"1", "true", "yes", "on"}:
     raise RuntimeError("Development invitation links cannot be exposed in production.")

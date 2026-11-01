@@ -78,6 +78,15 @@ def _opt_int(lo: int, hi: int):
     return f
 
 
+def _opt_decimal(lo: str, hi: str):
+    validate = _decimal(lo, hi)
+
+    def f(v):
+        return None if v is None else validate(v)
+
+    return f
+
+
 @dataclass(frozen=True)
 class SettingDef:
     key: str
@@ -131,6 +140,12 @@ _DEFS = [
                "یادآوری به مدیر پس از N روز کاری (خالی = غیرفعال)", "workflow"),
     SettingDef("workflow.escalate_after_working_days", None, _opt_int(1, 60),
                "ارجاع خودکار به HR پس از N روز کاری (خالی = غیرفعال)", "workflow"),
+    SettingDef("jobs.carry_forward_policy", "none", _enum("none", "unlimited", "capped"),
+               "سیاست انتقال خودکار مانده (پیش‌فرض غیرفعال)", "jobs"),
+    SettingDef("jobs.carry_forward_cap", None, _opt_decimal("0", "366"),
+               "سقف روز انتقال خودکار؛ فقط برای سیاست capped", "jobs"),
+    SettingDef("jobs.expire_carry_over", False, _bool,
+               "انقضای خودکار مؤلفه انتقال‌یافته در مرز سال مرخصی", "jobs"),
     SettingDef("holidays.source", "manual", _enum("manual"), "منبع تعطیلات (ثبت دستی توسط مدیر)", "holidays"),
 ]
 DEFS: dict[str, SettingDef] = {d.key: d for d in _DEFS}

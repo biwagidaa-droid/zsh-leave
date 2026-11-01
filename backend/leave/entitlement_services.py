@@ -62,6 +62,10 @@ def _event_key(entitlement_id: int, key: str) -> str:
     return hashlib.sha256(value).hexdigest()
 
 
+def entitlement_event_idempotency_key(entitlement_id: int, key: str) -> str:
+    return _event_key(entitlement_id, key)
+
+
 def _sum_events(entitlement_id: int, request_id: int | None = None) -> dict[str, Decimal]:
     rows = EntitlementEvent.objects.filter(entitlement_id=entitlement_id)
     if request_id is not None:

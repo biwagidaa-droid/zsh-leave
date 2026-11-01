@@ -988,5 +988,18 @@ class FrontendApiTests(TestCase):
         settings_response = client.get("/api/v1/admin/settings/")
         self.assertEqual(settings_response.status_code, 200)
         self.assertIn("bradford.threshold_review", {row["key"] for row in settings_response.json()})
-        self.assertEqual(client.get("/api/v1/ready/").status_code, 200)
-        self.assertEqual(client.get("/api/v1/admin/jobs/").json(), [])
+        ready_response = client.get("/api/v1/ready/")
+        self.assertEqual(ready_response.status_code, 200, ready_response.content)
+        jobs_response = client.get("/api/v1/admin/jobs/")
+        self.assertEqual(jobs_response.status_code, 200)
+        self.assertEqual(
+            jobs_response.json()["scheduler"]["status"],
+            "scheduler_not_configured",
+        )
+        self.assertEqual(
+            {job["name"] for job in jobs_response.json()["jobs"]},
+            {
+                "overdue_escalation", "manager_reminders",
+                "carry_forward", "entitlement_expiration",
+            },
+        )

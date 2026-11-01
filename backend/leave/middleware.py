@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 import re
 from contextvars import ContextVar
 from uuid import uuid4
@@ -11,6 +12,20 @@ _audit_context: ContextVar[dict | None] = ContextVar("leave_audit_context", defa
 
 def current_audit_context() -> dict | None:
     return _audit_context.get()
+
+
+@contextmanager
+def audit_context(*, correlation_id: str, source: str):
+    if not _CORRELATION_PATTERN.fullmatch(correlation_id):
+        raise ValueError("Invalid audit correlation ID")
+    token = _audit_context.set({
+        "correlation_id": correlation_id,
+        "source": source[:128],
+    })
+    try:
+        yield
+    finally:
+        _audit_context.reset(token)
 
 
 class AuditContextMiddleware:

@@ -144,7 +144,7 @@ These endpoints back the remaining frontend pages. They require an authenticated
 | GET | `/api/v1/coverage/?from={date}&to={date}` | Aggregate approved absences per department/day for the caller's HR or manager scope; maximum 93 days. |
 | GET | `/api/v1/reports/{kind}` | Return aggregate series for `absences`, `balances`, `trends`, or `process-health`; small groups are suppressed using `privacy.min_group_size`. `bradford` returns provisional employee-level scores only to scoped HR, with explicit policy configuration, period, pagination, warnings, and empty-state metadata; details are documented in [Bradford policy](../bradford-policy-fa.md). |
 | GET/POST | `/api/v1/admin/settings/` | Read/validate/audit schema-defined settings; system-admin only. |
-| GET | `/api/v1/admin/jobs/` | Returns an empty list until persistent job-run records are implemented; system-admin only. |
+| GET | `/api/v1/admin/jobs/` | System-admin only; returns scheduler configuration/heartbeat plus job schedule, enabled state, and latest persisted execution (safe summary, attempt count, correlation ID, and error code). A disabled/missing scheduler is reported as `scheduler_not_configured`; this is not a manual-run endpoint. |
 | GET | `/api/v1/audit/events/` | Return recent complete rows for global admins or redacted employee-related event summaries within current HR scope; other actors are denied. |
 | GET | `/api/v1/policy/client` | Return actual employee-specific calendar work-pattern values. Hourly leave and auto-cancel remain disabled until backend policy support exists. |
 | GET/POST | `/api/v1/hr/bradford-notes/` | Read/upsert notes for employees in HR scope. |
@@ -162,7 +162,7 @@ Demo data is selected only in development. Production builds always use the HTTP
 - Frontend management screens for range holidays, work patterns, and policy versions
 - backend-authoritative hourly leave calculations tied to work patterns and holidays
 - leave-year configuration, rollover, expiry, and their ledger operations
-- persistent scheduler/job-run records and report file exports
+- report file exports
 - password reset/onboarding APIs
 
 ## 5. Notes

@@ -1,9 +1,9 @@
 # استقرار، پشتیبان‌گیری، بازیابی
 
-وضعیت: طراحی؛ **هیچ‌کدام در این محیط اجرا نشده** (Docker/PostgreSQL در دسترس نیست).
+وضعیت: نمونه پیکربندی systemd زمان‌بند در [راهنمای کارهای پس‌زمینه](./background-jobs-fa.md) ثبت شده است؛ اجرای production در این محیط تأیید نشده است.
 
 ## سرویس‌ها (Docker Compose)
-`db` (PostgreSQL، volume)، `backend`، `worker` (Jobها)، `proxy` (TLS)، `redis` فقط در صورت نیاز. تنظیمات از `.env` (نمونه `.env.example` بدون راز واقعی).
+اجزای لازم: `db` (PostgreSQL، volume)، `backend` و `proxy` (TLS). زمان‌بندی با systemd timer میزبان و اجرای یک‌باره management command انجام می‌شود؛ worker دائمی یا Redis لازم نیست. تنظیمات از `.env` یا فایل محیط محافظت‌شده سرویس بارگذاری می‌شوند.
 
 ## نصب
 1. کپی `.env.example` → `.env` و تنظیم SECRET_KEY، DB، ALLOWED_HOSTS و SMTP. پیکربندی SMTP برای ارسال دعوت کارکنان در production لازم است؛ راهنمای متغیرها در [چرخه عمر حساب کارمند](./account-lifecycle-fa.md) است.
@@ -12,6 +12,8 @@
 4. `docker compose exec backend python manage.py createcachetable zsh_cache` برای cache مشترک محدودسازی درخواست.
 5. ایجاد مدیر سامانه با `createsuperadmin`.
 6. بارگذاری داده نمونه فقط در Demo (`seed_demo`).
+
+برای اجرای کارهای زمان‌بندی‌شده، unit و timer systemd و شرط‌های readiness در [راهنمای عملیات پس‌زمینه](./background-jobs-fa.md) را دقیقاً نصب و فعال کنید. بدون این پیکربندی، Jobs API زمان‌بند را پیکربندی‌نشده اعلام می‌کند و readiness production موفق نمی‌شود.
 
 ## پشتیبان‌گیری
 `pg_dump -Fc` شبانه + کپی volume پیوست‌ها؛ رمزگذاری با کلید جدا؛ نگهداری چرخشی.

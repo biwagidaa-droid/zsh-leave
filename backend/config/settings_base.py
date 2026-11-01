@@ -118,6 +118,10 @@ ZSH_INVITATION_EXPOSE_DEV_LINKS = (
     env("ZSH_INVITATION_EXPOSE_DEV_LINKS", "0").lower() in {"1", "true", "yes", "on"}
 )
 ZSH_PUBLIC_BASE_URL = env("ZSH_PUBLIC_BASE_URL", "")
+ZSH_JOB_SCHEDULER_ENABLED = env("ZSH_JOB_SCHEDULER_ENABLED", "0").lower() in {
+    "1", "true", "yes", "on",
+}
+ZSH_JOB_SCHEDULER_REQUIRED = False
 if ZSH_INVITATION_TOKEN_TTL_HOURS < 1:
     raise RuntimeError("ZSH_INVITATION_TOKEN_TTL_HOURS must be positive.")
 

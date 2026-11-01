@@ -849,6 +849,54 @@ class SystemSetting(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
 
+class JobExecution(models.Model):
+    STATUS_QUEUED = "queued"
+    STATUS_RUNNING = "running"
+    STATUS_SUCCEEDED = "succeeded"
+    STATUS_PARTIAL_FAILURE = "partial_failure"
+    STATUS_FAILED = "failed"
+    STATUS_CHOICES = [
+        (STATUS_QUEUED, "Queued"),
+        (STATUS_RUNNING, "Running"),
+        (STATUS_SUCCEEDED, "Succeeded"),
+        (STATUS_PARTIAL_FAILURE, "Partial failure"),
+        (STATUS_FAILED, "Failed"),
+    ]
+
+    job_name = models.CharField(max_length=64)
+    scheduled_for = models.DateTimeField()
+    started_at = models.DateTimeField(null=True, blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    status = models.CharField(max_length=24, choices=STATUS_CHOICES, default=STATUS_QUEUED)
+    attempt_count = models.PositiveSmallIntegerField(default=0)
+    retry_after = models.DateTimeField(null=True, blank=True)
+    result_summary = models.JSONField(default=dict)
+    error_code = models.CharField(max_length=64, blank=True)
+    correlation_id = models.CharField(max_length=128, default=uuid.uuid4)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["job_name", "scheduled_for"], name="uniq_job_execution_schedule",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["job_name", "-scheduled_for"], name="job_exec_name_sched_idx"),
+            models.Index(fields=["status", "retry_after"], name="job_exec_status_retry_idx"),
+        ]
+
+
+class JobEffect(models.Model):
+    job_name = models.CharField(max_length=64)
+    effect_key = models.CharField(max_length=255, unique=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+
+class SchedulerHeartbeat(models.Model):
+    name = models.CharField(max_length=64, unique=True)
+    checked_at = models.DateTimeField()
+
+
 class PublicHoliday(models.Model):
     """تعطیلی ثبت‌شده دستی (شمسی). jalali_year خالی = سالانه."""
     scope = models.CharField(max_length=64, default="*")      # '*' ملی؛ یا کد شرکت/منطقه

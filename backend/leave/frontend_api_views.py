@@ -863,7 +863,9 @@ def audit_events(request):
 def jobs(request):
     if not _admin(_context(request)):
         return _failure("permission_denied", "مشاهده Jobها فقط برای مدیر سامانه مجاز است", 403)
-    return Response([])
+    from .job_services import job_status_payload
+
+    return Response(job_status_payload())
 
 
 @api_view(["GET"])
@@ -915,6 +917,7 @@ def _notification_json(event: LeaveRequestEvent, read: bool) -> dict:
         "request_withdraw": "درخواست لغو مرخصی ثبت شد",
         "approve_withdraw": "لغو مرخصی تأیید شد",
         "reject_withdraw": "لغو مرخصی رد شد",
+        "reminder": "یادآوری درخواست معوق",
     }
     return {
         "id": event.pk,

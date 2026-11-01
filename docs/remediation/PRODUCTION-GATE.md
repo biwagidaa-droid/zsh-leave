@@ -12,7 +12,7 @@
 | F — Data integrity | PARTIAL | migration drift و آزمون‌های SQLite موفق‌اند؛ hierarchy/import/append-only کامل بررسی نشده است. |
 | G — PostgreSQL | BLOCKED / NOT VERIFIED | SQLite تست شد؛ ۳ آزمون PostgreSQL-only رد شدند؛ اتصال واقعی PostgreSQL برقرار/تأیید نشد. |
 | H — Frontend | NOT VERIFIED کلی | ۳۴ تست و production build موفق؛ بازبینی کامل API contracts/role UX/E2E انجام نشده است. |
-| I — Jobs | NOT VERIFIED / GAP CONFIRMED | مستند معماری scheduler را planned می‌داند و admin jobs endpoint `[]` می‌دهد؛ scheduler پیاده‌سازی نشده است. |
+| I — Jobs | IMPLEMENTED / NOT VERIFIED IN PRODUCTION | مدیریت اجرای DB-backed، retry محدود، readiness، API وضعیت و نمونه systemd timer وجود دارد؛ نصب timer، پیکربندی سیاست‌ها و آزمون PostgreSQL/production هنوز انجام نشده است. |
 | J — Deployment | NOT VERIFIED | static prod settings بررسی اولیه شده؛ TLS proxy، secrets در محیط واقعی، backup/restore و monitoring اجرا/تأیید نشده‌اند. |
 | K — Testing | PARTIAL | آزمون‌های موجود سبز؛ PostgreSQL/E2E و lint مستقل در دسترس نبودند. |
 

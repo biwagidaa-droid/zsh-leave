@@ -56,7 +56,7 @@ DJANGO_SETTINGS_MODULE=config.settings_test python3 manage.py test
 
 ## لاگ، سلامت و عیب‌یابی
 
-`LOGGING` console-based و Django/leave سطح INFO است. Login رویداد audit می‌نویسد و failure پیام generically log می‌شود. سامانه log aggregation، alert، retention و redaction مرکزی را در مخزن پیکربندی نکرده است. `/api/v1/health/` وضعیت زنده و `/api/v1/ready/` اتصال `SELECT 1` را گزارش می‌دهد؛ readiness آزمون migration، worker، storage یا mail نیست. صفحه Jobs از `/api/v1/admin/jobs/` مقدار خالی می‌گیرد.
+`LOGGING` console-based و Django/leave سطح INFO است. Login رویداد audit می‌نویسد و failure پیام generically log می‌شود. سامانه log aggregation، alert، retention و redaction مرکزی را در مخزن پیکربندی نکرده است. `/api/v1/health/` وضعیت زنده را می‌دهد؛ readiness اتصال DB و در production heartbeat زمان‌بند را بررسی می‌کند. API مدیر `/api/v1/admin/jobs/` وضعیت زمان‌بند و اجرای امن Jobها را نشان می‌دهد. استقرار زمان‌بند systemd در [راهنمای عملیات پس‌زمینه](../background-jobs-fa.md) آمده است؛ این نمونه در production این محیط اجرا/تأیید نشده است.
 
 | مشکل | بررسی |
 |---|---|
@@ -69,7 +69,7 @@ DJANGO_SETTINGS_MODULE=config.settings_test python3 manage.py test
 
 ## استقرار و عملیات بازیابی
 
-Docker/Compose، CI/CD، reverse proxy، scheduler، worker و فرآیند restore عملی در مخزن وجود ندارد. `gunicorn` در dependency است. نمونه فرمان اجرای WSGI با فرض آماده‌بودن environment و DB:
+Docker/Compose، CI/CD، reverse proxy و فرآیند restore عملی در مخزن وجود ندارد. نمونه systemd timer برای زمان‌بند وجود دارد؛ نصب و فعال بودن آن در محیط مقصد همچنان مسئولیت deployment است. `gunicorn` در dependency است. نمونه فرمان اجرای WSGI با فرض آماده‌بودن environment و DB:
 
 ```bash
 cd backend
