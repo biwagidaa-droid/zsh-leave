@@ -13,9 +13,11 @@ STATUS_CHOICES = [(s, s) for s in (wf.PENDING, wf.ESCALATED, wf.APPROVED, wf.REJ
 
 class OrganizationalHierarchyQuerySet(models.QuerySet):
     relationship_fields = {
+        "OrganizationSite": {"company", "company_id"},
         "Department": {"company", "company_id", "parent", "parent_id"},
         "EmployeeProfile": {
-            "company", "company_id", "department", "department_id", "manager", "manager_id",
+            "company", "company_id", "site", "site_id", "department", "department_id",
+            "manager", "manager_id",
         },
     }
 
@@ -73,6 +75,8 @@ class Company(models.Model):
 
 
 class OrganizationSite(models.Model):
+    objects = OrganizationalHierarchyManager()
+
     company = models.ForeignKey(Company, on_delete=models.PROTECT, related_name="sites")
     code = models.CharField(max_length=32)
     name = models.CharField(max_length=200)
@@ -82,6 +86,33 @@ class OrganizationSite(models.Model):
         constraints = [
             models.UniqueConstraint(fields=["company", "code"], name="uniq_site_code_in_company"),
         ]
+
+    def clean(self):
+        from django.core.exceptions import ValidationError
+
+        if self.pk is not None:
+            original_company_id = OrganizationSite.objects.filter(pk=self.pk).values_list(
+                "company_id", flat=True,
+            ).first()
+            if original_company_id is not None and original_company_id != self.company_id:
+                raise ValidationError({
+                    "company": "مالکیت سایت پس از ایجاد قابل تغییر نیست؛ برای انتقال، سایت جدید بسازید",
+                })
+
+    def save(self, *args, **kwargs):
+        from .hierarchy_services import lock_organizational_hierarchy
+
+        with transaction.atomic():
+            lock_organizational_hierarchy()
+            self.full_clean()
+            return super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        from .hierarchy_services import lock_organizational_hierarchy
+
+        with transaction.atomic():
+            lock_organizational_hierarchy()
+            return super().delete(*args, **kwargs)
 
 
 class Department(models.Model):
@@ -163,6 +194,9 @@ class EmployeeProfile(models.Model):
         constraints = [
             models.UniqueConstraint(fields=["company", "personnel_code"], name="uniq_personnel_code"),
             models.CheckConstraint(condition=~Q(manager=models.F("id")), name="manager_not_self"),
+        ]
+        indexes = [
+            models.Index(fields=["company", "site"], name="employee_company_site_idx"),
         ]
 
     def clean(self):

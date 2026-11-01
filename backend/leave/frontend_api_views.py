@@ -9,7 +9,7 @@ from uuid import uuid4
 from django.contrib.auth import get_user_model
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import IntegrityError, transaction
-from django.db.models import CharField, Count, Q
+from django.db.models import CharField, Count, ProtectedError, Q
 from django.db.models.functions import Cast
 from django.http import FileResponse, Http404
 from django.utils import timezone
@@ -36,6 +36,7 @@ from .invitation_services import (
     normalize_email,
     synchronize_employment_access,
 )
+from .hierarchy_services import lock_organizational_hierarchy
 from .models import (
     AuditEvent,
     BradfordNote,
@@ -85,11 +86,32 @@ def _hr(context, employee: EmployeeProfile) -> bool:
 
 def _employee_rows(context):
     rows = EmployeeProfile.objects.select_related(
-        "user", "company", "department", "manager__user",
+        "user", "company", "site", "department", "manager__user",
     ).filter(is_employee=True)
     if _admin(context):
         return rows
     return rows.filter(pk__in=scoped_employees(context).values("pk"))
+
+
+def _site_rows(context):
+    if _admin(context):
+        return OrganizationSite.objects.all()
+
+    filters = Q(pk__in=_employee_rows(context).exclude(site_id=None).values("site_id"))
+    for assignment in context.assignments:
+        if assignment.role != "hr":
+            continue
+        if assignment.scope == RoleAssignment.SCOPE_COMPANY:
+            filters |= Q(company_id=assignment.company_id)
+        elif assignment.scope == RoleAssignment.SCOPE_SITE:
+            filters |= Q(pk=assignment.site_id)
+    return OrganizationSite.objects.filter(filters).distinct()
+
+
+def _can_manage_company_sites(context, company_id: int) -> bool:
+    return _admin(context) or context.has_scope(
+        "hr", company_id=company_id, site_id=None, department_id=None, employee_id=None,
+    )
 
 
 def _employee_json(employee: EmployeeProfile) -> dict:
@@ -100,6 +122,8 @@ def _employee_json(employee: EmployeeProfile) -> dict:
         "personnelCode": employee.personnel_code,
         "companyId": employee.company_id,
         "companyName": employee.company.name,
+        "siteId": employee.site_id,
+        "siteName": employee.site.name if employee.site_id else None,
         "departmentName": employee.department.name if employee.department_id else "",
         "positionName": "",
         "managerName": (
@@ -364,6 +388,11 @@ def employees(request, employee_id: int | None = None):
     context = _context(request)
     rows = _employee_rows(context)
     if request.method == "GET":
+        if employee_id is not None:
+            employee = rows.filter(pk=employee_id).first()
+            if employee is None:
+                raise Http404
+            return Response(_employee_json(employee))
         query = request.query_params.get("q", "").strip()
         if query:
             rows = rows.filter(
@@ -381,7 +410,7 @@ def employees(request, employee_id: int | None = None):
     except EmployeeProfile.DoesNotExist:
         raise Http404
     allowed = {
-        "displayName", "personnelCode", "companyId", "departmentId", "managerId",
+        "displayName", "personnelCode", "companyId", "siteId", "departmentId", "managerId",
         "startDate", "endDate", "email",
     }
     if set(data) - allowed or not {"displayName", "personnelCode", "companyId"}.issubset(data):
@@ -399,11 +428,18 @@ def employees(request, employee_id: int | None = None):
     try:
         company = Company.objects.get(pk=data["companyId"])
         department_id = int(data["departmentId"]) if data.get("departmentId") else None
-        if not _admin(context) and not context.has_scope(
-            "hr", company_id=company.pk, site_id=None, department_id=department_id, employee_id=None,
-        ):
-            return _failure("permission_denied", "ثبت در این شرکت یا واحد مجاز نیست", 403)
         department = Department.objects.get(pk=data["departmentId"]) if data.get("departmentId") else None
+        if data.get("siteId") is not None:
+            if isinstance(data["siteId"], bool):
+                raise ValueError("siteId باید شناسه معتبر باشد")
+            site = OrganizationSite.objects.get(pk=int(data["siteId"]))
+        else:
+            site = employee.site if employee is not None and "siteId" not in data else None
+        if not _admin(context) and not context.has_scope(
+            "hr", company_id=company.pk, site_id=site.pk if site else None,
+            department_id=department_id, employee_id=None,
+        ):
+            return _failure("permission_denied", "ثبت در این شرکت یا محدوده سازمانی مجاز نیست", 403)
         manager = (
             hr_operation_employees(context).get(pk=data["managerId"])
             if data.get("managerId") else None
@@ -448,7 +484,9 @@ def employees(request, employee_id: int | None = None):
                 user.save(update_fields=["first_name"])
                 employee.company, employee.personnel_code = company, code
                 employee.start_date = start
-            employee.department, employee.manager, employee.end_date = department, manager, end
+            employee.site, employee.department, employee.manager, employee.end_date = (
+                site, department, manager, end,
+            )
             if department and department.company_id != company.pk:
                 raise ValueError("واحد باید متعلق به شرکت انتخاب‌شده باشد")
             if manager and manager.company_id != company.pk:
@@ -468,8 +506,11 @@ def employees(request, employee_id: int | None = None):
                 before=before,
                 after=after,
             )
-    except (Company.DoesNotExist, Department.DoesNotExist, EmployeeProfile.DoesNotExist):
-        return _failure("related_object_not_found", "شرکت، واحد یا مدیر پیدا نشد", 404)
+    except (
+        Company.DoesNotExist, Department.DoesNotExist, OrganizationSite.DoesNotExist,
+        EmployeeProfile.DoesNotExist,
+    ):
+        return _failure("related_object_not_found", "شرکت، سایت، واحد یا مدیر پیدا نشد", 404)
     except (ValueError, TypeError, ValidationError) as exc:
         return _failure("invalid_employee", str(exc), 400)
     except IntegrityError:
@@ -565,16 +606,48 @@ def companies(request, company_id: int | None = None):
     return Response(_company_json(item), status=201 if company_id is None else 200)
 
 
-@api_view(["GET", "POST", "PATCH"])
+@api_view(["GET", "POST", "PATCH", "DELETE"])
 def sites(request, site_id: int | None = None):
     context = _context(request)
     if request.method == "GET":
-        rows = OrganizationSite.objects.all() if _admin(context) else OrganizationSite.objects.filter(
-            pk__in=_employee_rows(context).values("site_id"),
-        )
+        rows = _site_rows(context)
+        if site_id is not None:
+            item = rows.filter(pk=site_id).first()
+            if item is None:
+                raise Http404
+            return Response(_site_json(item))
         return Response([_site_json(item) for item in rows.order_by("company_id", "name")])
-    if not _admin(context):
-        return _failure("permission_denied", "مدیریت سایت‌ها فقط برای مدیر سامانه مجاز است", 403)
+
+    if request.method == "DELETE":
+        if site_id is None:
+            return _failure("invalid_site", "برای حذف باید شناسه سایت مشخص باشد", 400)
+        try:
+            with transaction.atomic():
+                lock_organizational_hierarchy()
+                item = _site_rows(context).select_for_update().filter(pk=site_id).first()
+                if item is None:
+                    raise Http404
+                if not _can_manage_company_sites(context, item.company_id):
+                    return _failure("permission_denied", "مدیریت سایت‌های این شرکت مجاز نیست", 403)
+                before = audit_services.snapshot(item)
+                deleted_site_id = item.pk
+                item.delete()
+                audit_services.record_audit(
+                    actor=request.user,
+                    origin="admin" if _admin(context) else "hr",
+                    action="organization_site.delete",
+                    entity="OrganizationSite",
+                    entity_id=deleted_site_id,
+                    before=before,
+                )
+        except Http404:
+            raise
+        except ProtectedError:
+            return _failure(
+                "site_in_use", "سایتی که سوابق سازمانی به آن ارجاع دارند قابل حذف نیست", 409,
+            )
+        return Response(status=204)
+
     data = request.data
     allowed = {"companyId", "code", "name", "isActive"}
     if not isinstance(data, dict) or set(data) - allowed or not {"companyId", "code", "name"} <= set(data):
@@ -586,14 +659,31 @@ def sites(request, site_id: int | None = None):
         return _failure("invalid_payload", "کد و نام باید متن و وضعیت باید بولی باشد", 400)
     try:
         with transaction.atomic():
-            item = (
-                OrganizationSite.objects.select_for_update().filter(pk=site_id).first()
-                if site_id else OrganizationSite()
-            )
-            if item is None:
-                raise Http404
+            lock_organizational_hierarchy()
+            item = None
+            if site_id is not None:
+                item = _site_rows(context).select_for_update().filter(pk=site_id).first()
+                if item is None:
+                    raise Http404
+                if not _can_manage_company_sites(context, item.company_id):
+                    return _failure(
+                        "permission_denied", "مدیریت سایت‌های این شرکت مجاز نیست", 403,
+                    )
+
+            company = Company.objects.get(pk=data["companyId"])
+            if not _can_manage_company_sites(context, company.pk):
+                return _failure(
+                    "permission_denied", "ساخت یا انتقال سایت به این شرکت مجاز نیست", 403,
+                )
+            if item is not None and item.company_id != company.pk:
+                if not _admin(context):
+                    return _failure(
+                        "permission_denied", "انتقال سایت به شرکت دیگر مجاز نیست", 403,
+                    )
+
+            item = item or OrganizationSite()
             before = audit_services.snapshot(item) if item.pk is not None else None
-            item.company = Company.objects.get(pk=data["companyId"])
+            item.company = company
             item.code = data["code"].strip()
             item.name = data["name"].strip()
             if "isActive" in data:
@@ -602,7 +692,7 @@ def sites(request, site_id: int | None = None):
             item.save()
             audit_services.record_model_change(
                 actor=request.user,
-                origin="admin",
+                origin="admin" if _admin(context) else "hr",
                 action="organization_site.create" if before is None else "organization_site.update",
                 instance=item,
                 before=before,

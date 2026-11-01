@@ -12,7 +12,7 @@ from django.test import TestCase, TransactionTestCase
 from django.utils import timezone
 
 from leave.hierarchy_services import hierarchy_issues
-from leave.models import Company, Department, EmployeeProfile
+from leave.models import Company, Department, EmployeeProfile, OrganizationSite
 
 
 class OrganizationalHierarchyIntegrityTests(TestCase):
@@ -187,6 +187,48 @@ class OrganizationalHierarchyIntegrityTests(TestCase):
         manager.company = self.other_company
         with self.assertRaises(ValidationError):
             manager.save()
+
+    def test_site_company_and_employee_site_relationships_are_validated(self):
+        site = OrganizationSite.objects.create(
+            company=self.company, code="SITE", name="Main site",
+        )
+        employee = self.make_employee("SITE-EMPLOYEE", site=site)
+
+        foreign_site = OrganizationSite.objects.create(
+            company=self.other_company, code="FOREIGN-SITE", name="Foreign site",
+        )
+        employee.site = foreign_site
+        with self.assertRaises(ValidationError):
+            employee.save(update_fields=["site"])
+
+        site.company = self.other_company
+        with self.assertRaises(ValidationError):
+            site.save()
+        site.refresh_from_db()
+        self.assertEqual(site.company_id, self.company.pk)
+        with self.assertRaises(ValidationError):
+            OrganizationSite.objects.filter(pk=site.pk).update(company=self.other_company)
+
+        with self.assertRaises(ValidationError):
+            EmployeeProfile.objects.filter(pk=employee.pk).update(site=foreign_site)
+        employee.site = foreign_site
+        with self.assertRaises(ValidationError):
+            EmployeeProfile.objects.bulk_update([employee], ["site"])
+
+    def test_archived_site_keeps_existing_employee_but_rejects_new_assignment(self):
+        site = OrganizationSite.objects.create(
+            company=self.company, code="ARCHIVED", name="Archived site",
+        )
+        existing = self.make_employee("ARCHIVED-EXISTING", site=site)
+        site.is_active = False
+        site.save(update_fields=["is_active"])
+
+        existing.personnel_code = "ARCHIVED-EXISTING-UPDATED"
+        existing.save(update_fields=["personnel_code"])
+        self.assertEqual(existing.site_id, site.pk)
+
+        with self.assertRaises(ValidationError):
+            self.make_employee("ARCHIVED-NEW", site=site)
 
     def test_deletion_preserves_parent_and_manager_relationship_integrity(self):
         child_department = Department.objects.create(

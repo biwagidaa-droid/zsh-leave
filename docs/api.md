@@ -6,9 +6,9 @@
 |------|----------|-----|--------|------|
 | Auth | `/auth/login`, `/auth/logout`, `/auth/me`, `/auth/password` | POST/GET | همه | پیاده‌سازی‌شده؛ نشست، CSRF، محدودسازی ورود و ثبت تلاش ناموفق |
 | Account activation | `/auth/activate` | POST | عمومی، با توکن یک‌بارمصرف | تنظیم رمز با validator جنگو، تطبیق ایمیل و محدودسازی نرخ؛ پاسخ خطا عمومی |
-| Users/Employees | `/employees/`, `/employees/{id}/` | GET/POST/PATCH | HR، مدیر (فقط خواندنِ زیرمجموعه)، سامانه | scope؛ ساخت با `email` اختیاری؛ وضعیت چرخه در خروجی |
+| Users/Employees | `/employees/`, `/employees/{id}/` | GET/POST/PATCH | HR، مدیر (فقط خواندنِ زیرمجموعه)، سامانه | scope؛ `siteId` اختیاری و اعتبارسنجی‌شده در نوشتن؛ `siteId` و `siteName` در خروجی |
 | Employee invitations | `/employees/{id}/invitation/`, `/invitation/revoke`, `/suspend` | POST | HR دامنه‌دار، مدیر سامانه | ارسال/ارسال مجدد، لغو دعوت یا تعلیق؛ توکن قبلی باطل می‌شود؛ بدون Frontend |
-| Organization | `/companies/`, `/departments/`, `/positions/` | CRUD | مدیر سامانه | ممنوعیت حذف دارای وابسته |
+| Organization | `/companies/`, `/departments/`, `/positions/`, `/sites/`, `/sites/{id}/` | GET/POST/PATCH؛ حذف سایت فقط در نبود وابستگی | مدیر سامانه؛ HR شرکتی برای سایت‌های همان شرکت | شرکت والد مستقیم سایت است؛ مالکیت سایت تغییرناپذیر؛ بایگانی با `isActive=false`؛ حذف دارای وابسته ممنوع |
 | Contracts | `/employees/{id}/contract-periods/` | GET/POST | HR | عدم هم‌پوشانی بازه |
 | Leave types | `/leave-types/` | GET؛ POST/PATCH | همه (فیلترشده)؛ HR/سامانه | نوع محرمانه برای غیر HR حذف می‌شود |
 | Requests | `/leave-requests/` GET/POST؛ `/{id}/` GET/PATCH؛ `/{id}/approve|reject|cancel|withdraw|amend` POST | | طبق ماتریس | پیاده‌سازی Phase D؛ همه نوشتن‌ها Idempotency-Key دارند؛ انتقال، اصلاح، رویداد و Audit اتمیک |

@@ -6,7 +6,7 @@ from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.utils import timezone
 
-from .models import Company, Department, EmployeeProfile
+from .models import Company, Department, EmployeeProfile, OrganizationSite
 
 MAX_HIERARCHY_DEPTH = 1000
 
@@ -103,6 +103,20 @@ def validate_department_relationships(department: Department) -> None:
 def validate_employee_relationships(employee: EmployeeProfile) -> None:
     if employee.company_id is None:
         return
+    if employee.site_id:
+        site = OrganizationSite.objects.filter(pk=employee.site_id).values(
+            "company_id", "is_active",
+        ).first()
+        if site is None:
+            raise ValidationError({"site": "سایت پیدا نشد"})
+        if site["company_id"] != employee.company_id:
+            raise ValidationError({"site": "سایت باید متعلق به همان شرکت باشد"})
+        existing_site_id = (
+            EmployeeProfile.objects.filter(pk=employee.pk).values_list("site_id", flat=True).first()
+            if employee.pk is not None else None
+        )
+        if not site["is_active"] and existing_site_id != employee.site_id:
+            raise ValidationError({"site": "انتساب کارمند به سایت غیرفعال مجاز نیست"})
     if employee.department_id and not Department.objects.filter(
         pk=employee.department_id, company_id=employee.company_id,
     ).exists():
@@ -127,9 +141,13 @@ def hierarchy_issues() -> list[dict]:
         "id", "company_id", "parent_id",
     ))
     employees = list(EmployeeProfile.objects.order_by("pk").values(
-        "id", "company_id", "department_id", "manager_id", "is_employee", "user__is_active",
-        "account_status", "start_date", "end_date",
+        "id", "company_id", "site_id", "department_id", "manager_id", "is_employee",
+        "user__is_active", "account_status", "start_date", "end_date",
     ))
+    sites = {
+        row["id"]: row["company_id"]
+        for row in OrganizationSite.objects.order_by("pk").values("id", "company_id")
+    }
     today = timezone.localdate()
     issues: list[dict] = []
     department_by_id = {row["id"]: row for row in departments}
@@ -159,6 +177,11 @@ def hierarchy_issues() -> list[dict]:
     )
 
     for row in employees:
+        if row["site_id"] is not None and sites.get(row["site_id"]) != row["company_id"]:
+            issues.append({
+                "model": "EmployeeProfile", "id": row["id"], "field": "site",
+                "reason": "invalid_site_company",
+            })
         if row["department_id"] is not None:
             department = department_by_id.get(row["department_id"])
             if department is None or department["company_id"] != row["company_id"]:
