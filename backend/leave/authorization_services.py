@@ -1,8 +1,9 @@
 from django.contrib.auth import get_user_model
-from django.core.exceptions import ValidationError
+from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
 from django.http import Http404
 
+from .authorization import MANAGE_ROLE_ASSIGNMENTS, authorization_context, has_permission
 from .models import (
     AuditEvent,
     Company,
@@ -18,6 +19,10 @@ def grant_role_assignment(*, actor, user_id: int, role: str, scope: str,
                           company_id: int | None = None, site_id: int | None = None,
                           department_id: int | None = None,
                           employee_id: int | None = None) -> RoleAssignment:
+    if not has_permission(
+        authorization_context(actor), MANAGE_ROLE_ASSIGNMENTS,
+    ):
+        raise PermissionDenied("مدیریت نقش‌ها فقط برای مدیر سامانه مجاز است")
     user_model = get_user_model()
     target_user = user_model.objects.select_for_update().get(pk=user_id, is_active=True)
     if target_user.pk == actor.pk:
@@ -63,6 +68,10 @@ def grant_role_assignment(*, actor, user_id: int, role: str, scope: str,
 
 @transaction.atomic
 def revoke_role_assignment(*, actor, assignment_id: int) -> None:
+    if not has_permission(
+        authorization_context(actor), MANAGE_ROLE_ASSIGNMENTS,
+    ):
+        raise PermissionDenied("مدیریت نقش‌ها فقط برای مدیر سامانه مجاز است")
     active_assignments = list(
         RoleAssignment.objects.select_for_update().filter(is_active=True).order_by("pk")
     )

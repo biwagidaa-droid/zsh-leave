@@ -30,7 +30,8 @@
 | `balances` | خود | دامنه direct report | HR scope | endpoint با `employee=<id>` هر EmployeeProfile را از `_employee_rows` admin می‌پذیرد؛ دسترسی UI نمایش داده نمی‌شود | endpoint نیازمند EmployeeProfile و فقط self/direct reports/HR از `scoped_employees`؛ exec بدون پروفایل 403 | تناقض UI/API و احتمال دسترسی فراتر از تفکیک نقش؛ لازم است با مالک داده تعیین تکلیف شود |
 | `entitlements`, adjustment, import | ممنوع | ممنوع | HR scope | مجاز؛ `_employee_rows` برای admin همه کارمندان را برمی‌گرداند | ممنوع | endpoint اصلاح بعد از کنترل نقش و scope به سرویس دفترکل می‌رسد؛ آزمون مستقیم API اصلاح/import در suite موجود یافت نشد و موفقیت runtime این ممیزی را ادعا نمی‌کند |
 | `hr/absences` | ممنوع | ممنوع | HR و target در scope | نقش admin تنها HR نیست | ممنوع | ثبت/تأیید اتمیک؛ وضعیت درخواست‌ها حسابرسی می‌شود |
-| انواع مرخصی | GET فعال/requestable | همان | همه و mutation | همه و mutation | GET فعال/requestable | confidential type قابل self-request نیست |
+| انواع مرخصی: خواندن | GET فعال/requestable | همان | انواع فعال، شامل محرمانه برای عملیات HR | همه، حتی غیرفعال | GET فعال/requestable | خواندن مستقل از مدیریت است |
+| انواع مرخصی: ایجاد/ویرایش/غیرفعال‌سازی سراسری | ممنوع | ممنوع | ممنوع، حتی HR سراسری | فقط با `leave_type.global.manage` | ممنوع | فقط نقش `admin` سراسری یا superuser؛ دلیل الزامی و before/after audit؛ حذف فیزیکی/API حذف پشتیبانی نمی‌شود |
 | `employees` GET | endpoint با `_employee_rows`؛ کارمند معمولاً self | direct reports | HR scope | `_employee_rows` محدود، مگر query این view | در صورتی که scope Employee قابل مشاهده باشد | GET رکورد خارج scope 404 |
 | `employees` POST/PATCH | ممنوع | ممنوع | HR scope شرکت/واحد | مجاز | ممنوع | ایجاد حساب password unusable؛ کنترل company/dept/manager |
 | `companies` | فقط شرکت مربوط به `_employee_rows` | مشابه | شرکت‌های scope | همه؛ CRUD | شرکت مجاز از دامنه | تغییر فقط admin |

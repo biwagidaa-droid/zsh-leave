@@ -21,6 +21,7 @@ READ_WORK_PATTERNS = "work-pattern.read"
 READ_LEAVE_POLICY = "leave-policy.read"
 MANAGE_SYSTEM_CONFIGURATION = "system-configuration.manage"
 MANAGE_ROLE_ASSIGNMENTS = "role-assignment.manage"
+MANAGE_GLOBAL_LEAVE_TYPES = "leave_type.global.manage"
 
 
 @dataclass(frozen=True)
@@ -93,7 +94,9 @@ def has_permission(context: AuthorizationContext, permission: str, *,
     if not getattr(context.user, "is_active", False):
         return False
 
-    if permission in {MANAGE_SYSTEM_CONFIGURATION, MANAGE_ROLE_ASSIGNMENTS}:
+    if permission in {
+        MANAGE_SYSTEM_CONFIGURATION, MANAGE_ROLE_ASSIGNMENTS, MANAGE_GLOBAL_LEAVE_TYPES,
+    }:
         return context.has_role(ADMIN)
     if permission == READ_COMPANY_CALENDAR:
         if company_id is not None:

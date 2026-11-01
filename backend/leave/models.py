@@ -624,6 +624,7 @@ class AuditEvent(_AppendOnly):
     after = models.JSONField(null=True)
     reason = models.TextField(blank=True)
     result = models.CharField(max_length=16, default="ok")
+    correlation_id = models.CharField(max_length=128, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
 

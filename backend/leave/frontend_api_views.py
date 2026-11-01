@@ -7,7 +7,7 @@ from decimal import Decimal, InvalidOperation
 from uuid import uuid4
 
 from django.contrib.auth import get_user_model
-from django.core.exceptions import ValidationError
+from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import IntegrityError, transaction
 from django.db.models import Count, Q
 from django.http import FileResponse, Http404
@@ -19,8 +19,8 @@ from zsh_core import settings_schema
 from zsh_core.permissions import HR as POLICY_HR, Viewer, visible_balance_types
 from . import admin_services
 from .authorization import (
-    authorization_context, hr_operation_employees, scoped_employees, scoped_hr_employees,
-    scoped_hr_leave_requests,
+    MANAGE_GLOBAL_LEAVE_TYPES, authorization_context, has_permission, hr_operation_employees,
+    scoped_employees, scoped_hr_employees, scoped_hr_leave_requests,
 )
 from .entitlement_services import (
     EntitlementLedgerError,
@@ -153,39 +153,34 @@ def leave_types(request, type_id: int | None = None):
     context = _context(request)
     if request.method == "GET":
         rows = LeaveType.objects.all()
-        if not (context.has_role("hr") or _admin(context)):
+        if context.has_role("hr") and not has_permission(context, MANAGE_GLOBAL_LEAVE_TYPES):
+            rows = rows.filter(enabled=True)
+        elif not has_permission(context, MANAGE_GLOBAL_LEAVE_TYPES):
             rows = rows.filter(enabled=True, employee_requestable=True)
         return Response([_leave_type_json(item) for item in rows.order_by("sort_order", "pk")])
 
-    if not (context.has_role("hr") or _admin(context)):
+    if not has_permission(context, MANAGE_GLOBAL_LEAVE_TYPES):
         return _failure("permission_denied", "مدیریت انواع مرخصی مجاز نیست", 403)
     data = request.data
     allowed = {
         "key", "labelFa", "color", "countsAgainstBalance", "requiresApproval", "requiresNote",
         "requiresReplacement", "employeeRequestable", "confidential", "enabled", "sortOrder",
+        "reason",
     }
     if not isinstance(data, dict) or not data or set(data) - allowed:
         return _failure("invalid_payload", "فیلدهای نوع مرخصی معتبر نیست", 400)
     try:
-        item = LeaveType.objects.get(pk=type_id) if type_id is not None else LeaveType()
+        item = admin_services.save_leave_type(
+            actor=request.user,
+            leave_type_id=type_id,
+            data=data,
+            reason=data.get("reason", ""),
+            correlation_id=request.headers.get("X-Correlation-ID", ""),
+        )
     except LeaveType.DoesNotExist:
         raise Http404
-    mapping = {
-        "labelFa": "label_fa", "countsAgainstBalance": "counts_against_balance",
-        "requiresApproval": "requires_approval", "requiresNote": "requires_note",
-        "requiresReplacement": "requires_replacement", "employeeRequestable": "employee_requestable",
-        "confidential": "confidential", "enabled": "enabled", "sortOrder": "sort_order",
-    }
-    for api_key, model_key in mapping.items():
-        if api_key in data:
-            setattr(item, model_key, data[api_key])
-    if "key" in data:
-        item.key = data["key"]
-    if "color" in data:
-        item.color = data["color"]
-    try:
-        item.full_clean()
-        item.save()
+    except PermissionDenied:
+        return _failure("permission_denied", "مدیریت انواع مرخصی مجاز نیست", 403)
     except (ValidationError, IntegrityError, TypeError, ValueError):
         return _failure("invalid_leave_type", "اطلاعات نوع مرخصی معتبر نیست", 400)
     return Response(_leave_type_json(item), status=201 if type_id is None else 200)
@@ -537,7 +532,8 @@ def settings_api(request):
 @api_view(["GET"])
 def audit_events(request):
     context = _context(request)
-    if _admin(context):
+    is_admin = _admin(context)
+    if is_admin:
         rows = AuditEvent.objects.all()
     elif context.has_role("hr"):
         request_ids = scoped_hr_leave_requests(context).values("pk")
@@ -550,6 +546,9 @@ def audit_events(request):
             item.actor.get_full_name() or item.actor.get_username() if item.actor_id else None
         ), "action": item.action, "entity": item.entity, "entityId": item.entity_id,
         "reason": item.reason, "result": item.result, "createdAt": item.created_at.isoformat(),
+        "before": item.before if is_admin else None,
+        "after": item.after if is_admin else None,
+        "correlationId": item.correlation_id if is_admin else None,
     } for item in rows])
 
 

@@ -1,12 +1,86 @@
 """سرویس‌های داشبورد مدیریت: تنظیمات و تعطیلات. هر تغییر اعتبارسنجی، تراکنشی و حسابرسی می‌شود."""
 from __future__ import annotations
 
+from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
 
 from zsh_core import holidays as H
 from zsh_core import settings_schema as S
 from zsh_core.policy import LeavePolicy
-from .models import AuditEvent, PublicHoliday, PublicHolidayHistory, SystemSetting
+from .authorization import MANAGE_GLOBAL_LEAVE_TYPES, authorization_context, has_permission
+from .models import AuditEvent, LeaveType, PublicHoliday, PublicHolidayHistory, SystemSetting
+
+LEAVE_TYPE_FIELDS = {
+    "key": "key",
+    "labelFa": "label_fa",
+    "color": "color",
+    "countsAgainstBalance": "counts_against_balance",
+    "requiresApproval": "requires_approval",
+    "requiresNote": "requires_note",
+    "requiresReplacement": "requires_replacement",
+    "employeeRequestable": "employee_requestable",
+    "confidential": "confidential",
+    "enabled": "enabled",
+    "sortOrder": "sort_order",
+}
+
+
+def _leave_type_snapshot(item: LeaveType) -> dict:
+    return {
+        "key": item.key,
+        "labelFa": item.label_fa,
+        "labelEn": item.label_en,
+        "color": item.color,
+        "icon": item.icon,
+        "countsAgainstBalance": item.counts_against_balance,
+        "requiresApproval": item.requires_approval,
+        "requiresNote": item.requires_note,
+        "requiresReplacement": item.requires_replacement,
+        "employeeRequestable": item.employee_requestable,
+        "confidential": item.confidential,
+        "enabled": item.enabled,
+        "sortOrder": item.sort_order,
+    }
+
+
+@transaction.atomic
+def save_leave_type(*, actor, leave_type_id: int | None, data: dict,
+                    reason: str, correlation_id: str = "") -> LeaveType:
+    if not has_permission(
+        authorization_context(actor), MANAGE_GLOBAL_LEAVE_TYPES,
+    ):
+        raise PermissionDenied("مدیریت سراسری انواع مرخصی مجاز نیست")
+    if not isinstance(data, dict) or not data or set(data) - (set(LEAVE_TYPE_FIELDS) | {"reason"}):
+        raise ValidationError("فیلدهای نوع مرخصی معتبر نیست")
+    if not isinstance(reason, str) or not reason.strip():
+        raise ValidationError({"reason": "دلیل تغییر الزامی است"})
+    if not isinstance(correlation_id, str) or len(correlation_id) > 128:
+        raise ValidationError({"correlationId": "شناسه همبستگی معتبر نیست"})
+
+    item = (
+        LeaveType.objects.select_for_update().get(pk=leave_type_id)
+        if leave_type_id is not None
+        else LeaveType()
+    )
+    before = _leave_type_snapshot(item) if item.pk is not None else None
+    for api_key, model_key in LEAVE_TYPE_FIELDS.items():
+        if api_key in data:
+            setattr(item, model_key, data[api_key])
+    item.full_clean()
+    item.save()
+    after = _leave_type_snapshot(item)
+    AuditEvent.objects.create(
+        actor=actor,
+        origin="admin",
+        action="leave_type.create" if before is None else "leave_type.update",
+        entity="LeaveType",
+        entity_id=str(item.pk),
+        before=before,
+        after=after,
+        reason=reason.strip(),
+        correlation_id=correlation_id,
+    )
+    return item
 
 
 def load_settings() -> dict:

@@ -120,7 +120,7 @@ These endpoints back the remaining frontend pages. They require an authenticated
 
 | Method | Endpoint | Contract |
 |---|---|---|
-| GET/POST/PATCH | `/api/v1/leave-types/`, `/api/v1/leave-types/{id}/` | Read requestable types or manage types as HR/admin. Responses use the frontend camel-case `LeaveType` shape. |
+| GET/POST/PATCH | `/api/v1/leave-types/`, `/api/v1/leave-types/{id}/` | Read enabled requestable types (employee/manager), enabled types (scoped HR), or all types (global admin). POST/PATCH require the explicit `leave_type.global.manage` permission, granted only to global system administrators, and a non-empty `reason`; successful changes include before/after snapshots and actor/time in AuditEvent, with optional `X-Correlation-ID`. `enabled=false` is the supported deactivation path; DELETE, bulk changes, and imports are not supported. |
 | GET | `/api/v1/balances/?year={year}&employee={id?}` | Return ledger-derived balance projections for self, direct reports, or assigned HR scope. Reconciliation failures return 409. |
 | GET | `/api/v1/entitlements/?year={year}` | List in-scope HR entitlements. |
 | POST | `/api/v1/entitlements/{id}/adjust` | Append a ledger adjustment; `{days, reason}` is required. |

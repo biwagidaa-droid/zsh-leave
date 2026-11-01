@@ -20,6 +20,12 @@
 | fingerprint بخشی از ورودی را نادیده می‌گرفت | `workingDays` و `replacementId` در payload ثبت نمی‌شدند | fingerprint شامل همه فیلدهای اثرگذار است | استفاده از همان کلید با ورودی متفاوت 409 | FIXED AND VERIFIED |
 | دسترسی خارج دامنه و rollback | تست رگرسیون برای actor غیر HR، HR خارج دامنه و خطای اعتبارسنجی موجود نبود | تست‌های 403/404 و rollback رویداد/حسابرسی/idempotency افزوده شد | آزمون API SQLite | FIXED AND VERIFIED |
 
+## فاز ۳ — مجوز کاتالوگ سراسری LeaveType
+
+| یافته | ریشه | اقدام | آزمون | وضعیت |
+|---|---|---|---|---|
+| HR دامنه‌دار می‌توانست تنظیمات سراسری LeaveType را بخواند/تغییر دهد | endpoint، `has_role("hr")` را به‌عنوان مجوز نوشتن می‌پذیرفت؛ مدل LeaveType شرکت ندارد | افزودن `leave_type.global.manage` فقط برای admin سراسری/superuser؛ الزام permission در API و سرویس؛ HR فقط metadata فعال را می‌خواند؛ دلیل و before/after/actor/time/correlation ID در AuditEvent | آزمون منع create/update/confidential/counts/approval/deactivate و self-grant؛ آزمون عملیات مجاز admin، سیاست خواندن و نبود audit موفقیت کاذب؛ کل backend: ۱۸۹ تست، ۳ skipped | FIXED AND VERIFIED |
+
 ## سایر فازها
 
 فازهای lifecycle/offboarding، activation، RBAC سازمانی کامل، Bradford، scheduler، audit append-only، PostgreSQL، ادغام Frontend گسترده و آمادگی استقرار در این بازه پیاده‌سازی یا تأیید نشده‌اند. برای ادامه، `PROGRESS.md` را ببینید.

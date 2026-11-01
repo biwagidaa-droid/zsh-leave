@@ -5,11 +5,14 @@ from decimal import Decimal
 
 from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.core.exceptions import PermissionDenied
 from django.test import TestCase, override_settings
 from django.urls import resolve
 from rest_framework.test import APIClient
 
-from leave.authorization import authorization_context
+from leave.authorization import MANAGE_GLOBAL_LEAVE_TYPES, authorization_context, has_permission
+from leave.authorization_services import grant_role_assignment
+from leave.admin_services import save_leave_type
 from leave.entitlement_services import create_entitlement
 from leave.models import (
     AuditEvent,
@@ -103,6 +106,216 @@ class FrontendApiTests(TestCase):
         for path, route_name in routes.items():
             with self.subTest(path=path):
                 self.assertEqual(resolve(path).url_name, route_name)
+
+    def test_scoped_hr_cannot_create_or_mutate_global_leave_types(self):
+        initial_count = LeaveType.objects.count()
+        initial_audits = AuditEvent.objects.filter(entity="LeaveType").count()
+
+        created = self.client.post(
+            "/api/v1/leave-types/",
+            {"key": "other", "labelFa": "Other", "reason": "catalog change"},
+            format="json",
+        )
+        self.assertEqual(created.status_code, 403)
+        self.assertEqual(LeaveType.objects.count(), initial_count)
+
+        for field, value in (
+            ("confidential", True),
+            ("countsAgainstBalance", False),
+            ("requiresApproval", False),
+            ("enabled", False),
+        ):
+            with self.subTest(field=field):
+                response = self.client.patch(
+                    f"/api/v1/leave-types/{self.leave_type.pk}/",
+                    {field: value, "reason": "unauthorized change"},
+                    format="json",
+                )
+                self.assertEqual(response.status_code, 403)
+        self.assertEqual(
+            self.client.patch(
+                "/api/v1/leave-types/999999/",
+                {"enabled": False, "reason": "object substitution"},
+                format="json",
+            ).status_code,
+            403,
+        )
+
+        self.leave_type.refresh_from_db()
+        self.assertTrue(self.leave_type.counts_against_balance)
+        self.assertTrue(self.leave_type.requires_approval)
+        self.assertFalse(self.leave_type.confidential)
+        self.assertTrue(self.leave_type.enabled)
+        self.assertEqual(AuditEvent.objects.filter(entity="LeaveType").count(), initial_audits)
+        self.assertFalse(has_permission(
+            authorization_context(self.hr_user), MANAGE_GLOBAL_LEAVE_TYPES,
+        ))
+
+    def test_leave_type_mutation_rejects_employee_and_manager(self):
+        manager_user = get_user_model().objects.create_user(username="leave-type-manager")
+        manager = EmployeeProfile.objects.create(
+            user=manager_user, company=self.company, department=self.department,
+            personnel_code="M-1", start_date=dt.date(2020, 1, 1),
+        )
+        self.employee.manager = manager
+        self.employee.save(update_fields=["manager"])
+        audit_count = AuditEvent.objects.filter(entity="LeaveType").count()
+
+        for user in (self.employee_user, manager_user):
+            with self.subTest(user=user.username):
+                client = APIClient()
+                client.force_authenticate(user)
+                self.assertEqual(client.post(
+                    "/api/v1/leave-types/",
+                    {"key": "unauthorized", "labelFa": "No", "reason": "unauthorized"},
+                    format="json",
+                ).status_code, 403)
+                self.assertEqual(client.patch(
+                    f"/api/v1/leave-types/{self.leave_type.pk}/",
+                    {"requiresApproval": False, "reason": "unauthorized"},
+                    format="json",
+                ).status_code, 403)
+
+        self.leave_type.refresh_from_db()
+        self.assertTrue(self.leave_type.requires_approval)
+        self.assertEqual(AuditEvent.objects.filter(entity="LeaveType").count(), audit_count)
+
+    def test_global_admin_can_manage_and_audit_leave_types(self):
+        admin = get_user_model().objects.create_user(username="leave-type-admin")
+        RoleAssignment.objects.create(
+            user=admin, role=RoleAssignment.ROLE_ADMIN, scope=RoleAssignment.SCOPE_GLOBAL,
+        )
+        client = APIClient()
+        client.force_authenticate(admin)
+        self.assertTrue(has_permission(
+            authorization_context(admin), MANAGE_GLOBAL_LEAVE_TYPES,
+        ))
+
+        created = client.post(
+            "/api/v1/leave-types/",
+            {
+                "key": "special", "labelFa": "ویژه", "confidential": True,
+                "employeeRequestable": False, "countsAgainstBalance": True,
+                "requiresApproval": False, "reason": "Approved policy update",
+            },
+            format="json",
+            HTTP_X_CORRELATION_ID="leave-type-create-123",
+        )
+        self.assertEqual(created.status_code, 201, created.content)
+        item = LeaveType.objects.get(key="special")
+        create_audit = AuditEvent.objects.get(
+            entity="LeaveType", entity_id=str(item.pk), action="leave_type.create",
+        )
+        self.assertEqual(create_audit.actor_id, admin.pk)
+        self.assertIsNone(create_audit.before)
+        self.assertEqual(create_audit.after["requiresApproval"], False)
+        self.assertEqual(create_audit.reason, "Approved policy update")
+        self.assertEqual(create_audit.correlation_id, "leave-type-create-123")
+        self.assertIsNotNone(create_audit.created_at)
+        audit_response = client.get("/api/v1/audit/events/")
+        self.assertEqual(audit_response.status_code, 200)
+        serialized_audit = next(
+            event for event in audit_response.json()
+            if event["entity"] == "LeaveType" and event["entityId"] == str(item.pk)
+        )
+        self.assertEqual(serialized_audit["correlationId"], "leave-type-create-123")
+        self.assertIsNone(serialized_audit["before"])
+        self.assertEqual(serialized_audit["after"]["key"], "special")
+
+        updated = client.patch(
+            f"/api/v1/leave-types/{item.pk}/",
+            {"requiresApproval": True, "reason": "Approval policy restored"},
+            format="json",
+        )
+        self.assertEqual(updated.status_code, 200, updated.content)
+        update_audit = AuditEvent.objects.get(
+            entity="LeaveType", entity_id=str(item.pk), action="leave_type.update",
+            reason="Approval policy restored",
+        )
+        self.assertFalse(update_audit.before["requiresApproval"])
+        self.assertTrue(update_audit.after["requiresApproval"])
+
+        deactivated = client.patch(
+            f"/api/v1/leave-types/{item.pk}/",
+            {"enabled": False, "reason": "Retired by policy"},
+            format="json",
+        )
+        self.assertEqual(deactivated.status_code, 200)
+        item.refresh_from_db()
+        self.assertFalse(item.enabled)
+        self.assertEqual(client.delete(f"/api/v1/leave-types/{item.pk}/").status_code, 405)
+
+    def test_leave_type_read_access_is_separate_from_write_access(self):
+        disabled = LeaveType.objects.create(
+            key="disabled", label_fa="Disabled", enabled=False,
+        )
+        hr_response = self.client.get("/api/v1/leave-types/")
+        self.assertEqual(hr_response.status_code, 200)
+        self.assertEqual(
+            {item["key"] for item in hr_response.json()}, {"annual", "medical"},
+        )
+
+        employee_client = APIClient()
+        employee_client.force_authenticate(self.employee_user)
+        employee_response = employee_client.get("/api/v1/leave-types/")
+        self.assertEqual(employee_response.status_code, 200)
+        self.assertEqual({item["key"] for item in employee_response.json()}, {"annual"})
+
+        admin = get_user_model().objects.create_user(username="leave-type-read-admin")
+        RoleAssignment.objects.create(
+            user=admin, role=RoleAssignment.ROLE_ADMIN, scope=RoleAssignment.SCOPE_GLOBAL,
+        )
+        admin_client = APIClient()
+        admin_client.force_authenticate(admin)
+        admin_response = admin_client.get("/api/v1/leave-types/")
+        self.assertEqual(admin_response.status_code, 200)
+        self.assertEqual(
+            {item["key"] for item in admin_response.json()},
+            {"annual", "medical", disabled.key},
+        )
+
+    def test_leave_type_mutations_without_reason_and_hr_self_grant_are_denied(self):
+        admin = get_user_model().objects.create_user(username="reason-required-admin")
+        RoleAssignment.objects.create(
+            user=admin, role=RoleAssignment.ROLE_ADMIN, scope=RoleAssignment.SCOPE_GLOBAL,
+        )
+        admin_client = APIClient()
+        admin_client.force_authenticate(admin)
+        audit_count = AuditEvent.objects.filter(entity="LeaveType").count()
+        missing_reason = admin_client.patch(
+            f"/api/v1/leave-types/{self.leave_type.pk}/",
+            {"requiresApproval": False},
+            format="json",
+        )
+        self.assertEqual(missing_reason.status_code, 400)
+        self.leave_type.refresh_from_db()
+        self.assertTrue(self.leave_type.requires_approval)
+        self.assertEqual(AuditEvent.objects.filter(entity="LeaveType").count(), audit_count)
+
+        self_grant = self.client.post(
+            "/api/v1/admin/role-assignments/",
+            {
+                "userId": self.hr_user.pk, "role": "admin", "scope": "global",
+                "permission": MANAGE_GLOBAL_LEAVE_TYPES,
+            },
+            format="json",
+        )
+        self.assertEqual(self_grant.status_code, 403)
+        self.assertFalse(RoleAssignment.objects.filter(
+            user=self.hr_user, role=RoleAssignment.ROLE_ADMIN, is_active=True,
+        ).exists())
+        with self.assertRaises(PermissionDenied):
+            grant_role_assignment(
+                actor=self.hr_user, user_id=self.hr_user.pk,
+                role=RoleAssignment.ROLE_ADMIN, scope=RoleAssignment.SCOPE_GLOBAL,
+            )
+        with self.assertRaises(PermissionDenied):
+            save_leave_type(
+                actor=self.hr_user, leave_type_id=self.leave_type.pk,
+                data={"confidential": True}, reason="attempted service bypass",
+            )
+        self.leave_type.refresh_from_db()
+        self.assertFalse(self.leave_type.confidential)
 
     def test_hr_pages_read_real_leave_and_organization_data(self):
         entitlement = create_entitlement(
