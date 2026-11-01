@@ -9,16 +9,17 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 
+from . import audit_services
 from .authorization import authorization_context
 from .invitation_services import account_access_allowed
-from .models import AuditEvent, EmployeeProfile
+from .models import EmployeeProfile
 from .throttling import rate_limited
 
 logger = logging.getLogger("leave.auth")
 
 
 def _record_auth_event(action, entity_id, actor=None, result="ok"):
-    AuditEvent.objects.create(
+    audit_services.record_audit(
         actor=actor,
         origin="auth",
         action=action,

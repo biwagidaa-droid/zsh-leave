@@ -101,6 +101,15 @@ Dates in these contracts are Gregorian ISO dates. Jalali entry/display belongs t
 
 All leave-request endpoints require an authenticated session. Request visibility is limited to the owner, the request's manager snapshot, or HR with matching organization scope; system administrators and executive viewers do not gain individual-record access. Mutations require an `Idempotency-Key` header (1–128 characters). Reusing a key with the same actor, operation, and payload returns the original resource; reusing it for different input returns 409. Workflow state changes and their append-only event/audit records commit atomically.
 
+Business-critical administrative/HR mutations use the centralized audit service.
+`X-Correlation-ID` is validated and echoed; otherwise a server-generated ID is
+used. Audit source is server-derived. Audit writes fail closed in the same
+transaction as covered mutations. Scoped HR audit reads return summaries only;
+before/after, free-text reason, correlation ID, and source are restricted to
+global administrators. See
+[the coverage matrix](../remediation/AUDIT-COVERAGE-MATRIX.md) for audited
+paths and unsupported mutation channels.
+
 | Method | Endpoint | Contract |
 |---|---|---|
 | GET/POST | `/api/v1/leave-requests/` | List scoped requests with `scope=me\|team`, optional `status`, `q`, `page`, and `page_size` (maximum 100), or submit using `employeeId?`, `leaveTypeKey`, `start`, `end`, `reason?`, and `replacementId?`. Workdays are calculated by the backend; a supplied `workingDays` must match. |
@@ -120,19 +129,20 @@ These endpoints back the remaining frontend pages. They require an authenticated
 
 | Method | Endpoint | Contract |
 |---|---|---|
-| GET/POST/PATCH | `/api/v1/leave-types/`, `/api/v1/leave-types/{id}/` | Read enabled requestable types (employee/manager), enabled types (scoped HR), or all types (global admin). POST/PATCH require the explicit `leave_type.global.manage` permission, granted only to global system administrators, and a non-empty `reason`; successful changes include before/after snapshots and actor/time in AuditEvent, with optional `X-Correlation-ID`. `enabled=false` is the supported deactivation path; DELETE, bulk changes, and imports are not supported. |
+| GET/POST/PATCH | `/api/v1/leave-types/`, `/api/v1/leave-types/{id}/` | Read enabled requestable types (employee/manager), enabled types (scoped HR), or all types (global admin). POST/PATCH require the explicit `leave_type.global.manage` permission, granted only to global system administrators, and a non-empty `reason`; successful changes include before/after snapshots and actor/time in AuditEvent, with correlation context. `enabled=false` is the supported deactivation path; DELETE, bulk changes, and imports are not supported. |
 | GET | `/api/v1/balances/?year={year}&employee={id?}` | Return ledger-derived balance projections for self, direct reports, or assigned HR scope. Reconciliation failures return 409. |
 | GET | `/api/v1/entitlements/?year={year}` | List in-scope HR entitlements. |
 | POST | `/api/v1/entitlements/{id}/adjust` | Append a ledger adjustment; `{days, reason}` is required. |
 | POST | `/api/v1/entitlements/import/?dry_run=0\|1` | Validate CSV (`personnel_code,type,year,days`). Commit is all-or-nothing and uses the entitlement ledger. |
 | POST | `/api/v1/hr/absences/` | Create an absence for an employee in the caller's HR scope. HR-originated requests enter `APPROVED` directly through `submit_request`; exactly one `submit` event records the transition from empty to approved. `Idempotency-Key` is required; the payload fingerprint covers employee, type, dates, working days, reason, and replacement. The request, event, audit entry, ledger posting, and idempotency record commit atomically. |
-| GET | `/api/v1/employees/`, `/api/v1/companies/`, `/api/v1/departments/` | Read employee/organization rows scoped to the caller. Employee search accepts `q`. Employee creation is HR/admin; company and department writes are admin-only. |
+| GET | `/api/v1/employees/`, `/api/v1/companies/`, `/api/v1/departments/`, `/api/v1/sites/` | Read employee/organization rows scoped to the caller. Employee search accepts `q`. Employee creation is HR/admin; company, department, and site writes are admin-only. |
+| POST/PATCH | `/api/v1/companies/`, `/api/v1/companies/{id}/`, `/api/v1/departments/`, `/api/v1/departments/{id}/`, `/api/v1/sites/`, `/api/v1/sites/{id}/` | Global-admin create/update; before/after allowlisted snapshots and AuditEvent commit atomically. |
 | GET/POST | `/api/v1/employees/{id}/contract-periods/` | Read/add validated employee work-contract periods; HR must have scope for the employee. |
 | GET | `/api/v1/coverage/?from={date}&to={date}` | Aggregate approved absences per department/day for the caller's HR or manager scope; maximum 93 days. |
 | GET | `/api/v1/reports/{kind}` | Return aggregate series for `absences`, `balances`, `trends`, or `process-health`; small groups are suppressed using `privacy.min_group_size`. The `bradford` option returns a note directing users to the scoped Bradford page. |
 | GET/POST | `/api/v1/admin/settings/` | Read/validate/audit schema-defined settings; system-admin only. |
 | GET | `/api/v1/admin/jobs/` | Returns an empty list until persistent job-run records are implemented; system-admin only. |
-| GET | `/api/v1/audit/events/` | Return recent audit rows for system admins, or request-related rows within HR scope. |
+| GET | `/api/v1/audit/events/` | Return recent complete rows for global admins or redacted employee-related event summaries within current HR scope; other actors are denied. |
 | GET | `/api/v1/policy/client` | Return actual employee-specific calendar work-pattern values. Hourly leave and auto-cancel remain disabled until backend policy support exists. |
 | GET/POST | `/api/v1/hr/bradford-notes/` | Read/upsert notes for employees in HR scope. |
 | GET/POST | `/api/v1/leave-requests/{id}/attachments/` | List or upload a PDF/PNG/JPEG file up to 10 MiB for a visible request. Files are stored under generated private paths; contents are signature-checked. |

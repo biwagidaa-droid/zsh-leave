@@ -11,8 +11,8 @@ from django.db.models import Sum
 from zsh_core.balance import RequestLine, allocate_by_year, compute_carry_over
 from zsh_core.policy import leave_year_of
 from zsh_core.settings_schema import build_policy
+from . import audit_services
 from .models import (
-    AuditEvent,
     EntitlementEvent,
     LeaveEntitlement,
     LeaveRequest,
@@ -125,9 +125,7 @@ def _append_event(
 ) -> EntitlementEvent:
     deltas = {field: _decimal((deltas or {}).get(field, ZERO)) for field in _DELTA_FIELDS}
     event_key = _event_key(entitlement.pk, key)
-    safe_reason = (
-        "" if request is not None and request.leave_type.confidential else reason
-    )
+    safe_reason = "" if request is not None else reason
     existing = EntitlementEvent.objects.filter(idempotency_key=event_key).first()
     if existing is not None:
         same = (
@@ -172,14 +170,28 @@ def _append_event(
         reversal_of=reversal_of,
         **deltas,
     )
-    AuditEvent.objects.create(
+    audit_before = {
+        **event.before,
+        "entitlementId": entitlement.pk,
+        "employeeId": entitlement.employee_id,
+        "leaveTypeId": entitlement.leave_type_id,
+        "year": entitlement.year,
+    }
+    audit_after = {
+        **event.after,
+        "entitlementId": entitlement.pk,
+        "employeeId": entitlement.employee_id,
+        "leaveTypeId": entitlement.leave_type_id,
+        "year": entitlement.year,
+    }
+    audit_services.record_audit(
         actor=actor,
         origin="system" if actor is None else "user",
         action=f"entitlement.{kind}",
         entity="EntitlementEvent",
-        entity_id=str(event.pk),
-        before=event.before,
-        after=event.after,
+        entity_id=event.pk,
+        before=audit_before,
+        after=audit_after,
         reason=safe_reason,
     )
     allocation_updates = {}

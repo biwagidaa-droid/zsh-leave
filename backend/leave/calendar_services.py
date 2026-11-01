@@ -11,8 +11,8 @@ from django.db.models import Max, Q
 from zsh_core import holidays as holiday_rules
 from zsh_core import settings_schema
 from zsh_core.policy import LeavePolicy
+from . import audit_services
 from .models import (
-    AuditEvent,
     CalendarHoliday,
     CalendarHolidayHistory,
     Company,
@@ -92,14 +92,8 @@ def create_work_pattern(*, actor, name: str, company, weekdays: list[int], start
     if overlap.exists():
         raise ValidationError({"effective_from": "برای همین دامنه، الگوی کاری فعال در این بازه وجود دارد"})
     pattern.save()
-    AuditEvent.objects.create(
-        actor=actor, origin="admin", action="work_pattern.create",
-        entity="WorkPattern", entity_id=str(pattern.pk), after={
-            "name": pattern.name, "company_id": company.pk, "site_id": pattern.site_id,
-            "department_id": pattern.department_id, "employee_id": pattern.employee_id,
-            "effective_from": effective_from.isoformat(),
-            "effective_to": effective_to.isoformat() if effective_to else None,
-        },
+    audit_services.record_model_change(
+        actor=actor, origin="admin", action="work_pattern.create", instance=pattern,
     )
     return pattern
 
@@ -150,11 +144,9 @@ def create_policy_version(*, actor, scope: str, effective_from: dt.date, values:
     )
     record.full_clean()
     record.save()
-    AuditEvent.objects.create(
+    audit_services.record_model_change(
         actor=actor, origin="admin", action="leave_policy.create_version",
-        entity="LeavePolicyVersion", entity_id=str(record.pk),
-        after={"scope": scope, "version": version, "effective_from": effective_from.isoformat()},
-        reason=reason,
+        instance=record, reason=reason,
     )
     return record
 
@@ -313,9 +305,8 @@ def create_calendar_holiday(*, actor, **fields) -> CalendarHoliday:
     CalendarHolidayHistory.objects.create(
         holiday_id=holiday.pk, action="create", before=None, after=snapshot, actor=actor,
     )
-    AuditEvent.objects.create(
-        actor=actor, origin="admin", action="calendar_holiday.create",
-        entity="CalendarHoliday", entity_id=str(holiday.pk), after=snapshot,
+    audit_services.record_model_change(
+        actor=actor, origin="admin", action="calendar_holiday.create", instance=holiday,
     )
     return holiday
 
@@ -323,7 +314,8 @@ def create_calendar_holiday(*, actor, **fields) -> CalendarHoliday:
 @transaction.atomic
 def update_calendar_holiday(*, actor, holiday_id: int, changes: dict) -> CalendarHoliday:
     holiday = CalendarHoliday.objects.select_for_update().get(pk=holiday_id)
-    before = holiday_snapshot(holiday)
+    history_before = holiday_snapshot(holiday)
+    before = audit_services.snapshot(holiday)
     for key, value in changes.items():
         if key in {"id", "created_by_id", "created_at", "updated_at"}:
             raise ValidationError({key: "این فیلد قابل تغییر نیست"})
@@ -331,13 +323,14 @@ def update_calendar_holiday(*, actor, holiday_id: int, changes: dict) -> Calenda
     holiday.updated_by = actor
     holiday.full_clean()
     holiday.save()
-    after = holiday_snapshot(holiday)
+    after = audit_services.snapshot(holiday)
     CalendarHolidayHistory.objects.create(
-        holiday_id=holiday.pk, action="update", before=before, after=after, actor=actor,
+        holiday_id=holiday.pk, action="update", before=history_before,
+        after=holiday_snapshot(holiday), actor=actor,
     )
-    AuditEvent.objects.create(
+    audit_services.record_model_change(
         actor=actor, origin="admin", action="calendar_holiday.update",
-        entity="CalendarHoliday", entity_id=str(holiday.pk), before=before, after=after,
+        instance=holiday, before=before,
     )
     return holiday
 
@@ -348,15 +341,17 @@ def deactivate_calendar_holiday(*, actor, holiday_id: int, reason: str) -> None:
     if not reason:
         raise ValidationError({"reason": "دلیل غیرفعال‌سازی الزامی است"})
     holiday = CalendarHoliday.objects.select_for_update().get(pk=holiday_id)
-    before = holiday_snapshot(holiday)
+    history_before = holiday_snapshot(holiday)
+    before = audit_services.snapshot(holiday)
     holiday.is_active = False
     holiday.updated_by = actor
     holiday.save(update_fields=["is_active", "updated_by", "updated_at"])
-    after = holiday_snapshot(holiday)
+    after = audit_services.snapshot(holiday)
     CalendarHolidayHistory.objects.create(
-        holiday_id=holiday.pk, action="deactivate", before=before, after=after, actor=actor,
+        holiday_id=holiday.pk, action="deactivate", before=history_before,
+        after=holiday_snapshot(holiday), actor=actor,
     )
-    AuditEvent.objects.create(
+    audit_services.record_model_change(
         actor=actor, origin="admin", action="calendar_holiday.deactivate",
-        entity="CalendarHoliday", entity_id=str(holiday.pk), before=before, after=after, reason=reason,
+        instance=holiday, before=before, reason=reason,
     )

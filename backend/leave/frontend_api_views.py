@@ -9,7 +9,8 @@ from uuid import uuid4
 from django.contrib.auth import get_user_model
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import IntegrityError, transaction
-from django.db.models import Count, Q
+from django.db.models import CharField, Count, Q
+from django.db.models.functions import Cast
 from django.http import FileResponse, Http404
 from django.utils import timezone
 from rest_framework.decorators import api_view
@@ -18,6 +19,7 @@ from rest_framework.response import Response
 from zsh_core import settings_schema
 from zsh_core.permissions import HR as POLICY_HR, Viewer, visible_balance_types
 from . import admin_services
+from . import audit_services
 from .authorization import (
     MANAGE_GLOBAL_LEAVE_TYPES, authorization_context, has_permission, hr_operation_employees,
     scoped_employees, scoped_hr_employees, scoped_hr_leave_requests,
@@ -40,13 +42,17 @@ from .models import (
     Company,
     ContractPeriod,
     Department,
+    EmployeeInvitation,
+    EntitlementEvent,
     EmployeeProfile,
     LeaveEntitlement,
     LeaveRequestAttachment,
     LeaveRequest,
+    LeaveRequestComment,
     LeaveRequestEvent,
     LeaveType,
     NotificationRead,
+    OrganizationSite,
     RoleAssignment,
     SystemSetting,
 )
@@ -414,6 +420,11 @@ def employees(request, employee_id: int | None = None):
             raise ValueError("نام و کد پرسنلی الزامی است")
         created = employee is None
         with transaction.atomic():
+            if employee is not None:
+                employee = hr_operation_employees(context).select_for_update().get(pk=employee.pk)
+                before = audit_services.snapshot(employee)
+            else:
+                before = None
             if employee is None:
                 username = f"emp-{company.pk}-{code}"
                 if User.objects.filter(username=username).exists():
@@ -432,6 +443,7 @@ def employees(request, employee_id: int | None = None):
                 )
             else:
                 user = employee.user
+                display_name_changed = user.first_name != display_name
                 user.first_name = display_name
                 user.save(update_fields=["first_name"])
                 employee.company, employee.personnel_code = company, code
@@ -444,6 +456,18 @@ def employees(request, employee_id: int | None = None):
             employee.full_clean()
             employee.save()
             synchronize_employment_access(employee=employee, actor=request.user)
+            after = audit_services.snapshot(employee)
+            if not created:
+                after["displayNameChanged"] = display_name_changed
+            audit_services.record_audit(
+                actor=request.user,
+                origin="admin" if _admin(context) else "hr",
+                action="employee.create" if created else "employee.update",
+                entity="EmployeeProfile",
+                entity_id=employee.pk,
+                before=before,
+                after=after,
+            )
     except (Company.DoesNotExist, Department.DoesNotExist, EmployeeProfile.DoesNotExist):
         return _failure("related_object_not_found", "شرکت، واحد یا مدیر پیدا نشد", 404)
     except (ValueError, TypeError, ValidationError) as exc:
@@ -484,6 +508,13 @@ def _company_json(item: Company) -> dict:
     return {"id": item.pk, "code": item.code, "name": item.name, "isActive": item.is_active}
 
 
+def _site_json(item: OrganizationSite) -> dict:
+    return {
+        "id": item.pk, "companyId": item.company_id, "code": item.code,
+        "name": item.name, "isActive": item.is_active,
+    }
+
+
 def _department_json(item: Department) -> dict:
     return {"id": item.pk, "companyId": item.company_id, "code": item.code, "name": item.name,
             "parentId": item.parent_id}
@@ -506,18 +537,83 @@ def companies(request, company_id: int | None = None):
     if (not isinstance(data["code"], str) or not isinstance(data["name"], str)
             or ("isActive" in data and not isinstance(data["isActive"], bool))):
         return _failure("invalid_payload", "کد و نام باید متن و وضعیت باید بولی باشد", 400)
-    item = Company.objects.filter(pk=company_id).first() if company_id else Company()
-    if item is None:
-        raise Http404
-    item.code, item.name = data["code"].strip(), data["name"].strip()
-    if "isActive" in data:
-        item.is_active = data["isActive"]
     try:
-        item.full_clean()
-        item.save()
+        with transaction.atomic():
+            item = (
+                Company.objects.select_for_update().filter(pk=company_id).first()
+                if company_id else Company()
+            )
+            if item is None:
+                raise Http404
+            before = audit_services.snapshot(item) if item.pk is not None else None
+            item.code, item.name = data["code"].strip(), data["name"].strip()
+            if "isActive" in data:
+                item.is_active = data["isActive"]
+            item.full_clean()
+            item.save()
+            audit_services.record_model_change(
+                actor=request.user,
+                origin="admin",
+                action="company.create" if before is None else "company.update",
+                instance=item,
+                before=before,
+            )
+    except Http404:
+        raise
     except (ValidationError, IntegrityError):
         return _failure("invalid_company", "اطلاعات شرکت معتبر نیست", 400)
     return Response(_company_json(item), status=201 if company_id is None else 200)
+
+
+@api_view(["GET", "POST", "PATCH"])
+def sites(request, site_id: int | None = None):
+    context = _context(request)
+    if request.method == "GET":
+        rows = OrganizationSite.objects.all() if _admin(context) else OrganizationSite.objects.filter(
+            pk__in=_employee_rows(context).values("site_id"),
+        )
+        return Response([_site_json(item) for item in rows.order_by("company_id", "name")])
+    if not _admin(context):
+        return _failure("permission_denied", "مدیریت سایت‌ها فقط برای مدیر سامانه مجاز است", 403)
+    data = request.data
+    allowed = {"companyId", "code", "name", "isActive"}
+    if not isinstance(data, dict) or set(data) - allowed or not {"companyId", "code", "name"} <= set(data):
+        return _failure("invalid_payload", "شرکت، کد و نام سایت الزامی است", 400)
+    if (
+        not isinstance(data["code"], str) or not isinstance(data["name"], str)
+        or ("isActive" in data and not isinstance(data["isActive"], bool))
+    ):
+        return _failure("invalid_payload", "کد و نام باید متن و وضعیت باید بولی باشد", 400)
+    try:
+        with transaction.atomic():
+            item = (
+                OrganizationSite.objects.select_for_update().filter(pk=site_id).first()
+                if site_id else OrganizationSite()
+            )
+            if item is None:
+                raise Http404
+            before = audit_services.snapshot(item) if item.pk is not None else None
+            item.company = Company.objects.get(pk=data["companyId"])
+            item.code = data["code"].strip()
+            item.name = data["name"].strip()
+            if "isActive" in data:
+                item.is_active = data["isActive"]
+            item.full_clean()
+            item.save()
+            audit_services.record_model_change(
+                actor=request.user,
+                origin="admin",
+                action="organization_site.create" if before is None else "organization_site.update",
+                instance=item,
+                before=before,
+            )
+    except Http404:
+        raise
+    except Company.DoesNotExist:
+        return _failure("related_object_not_found", "شرکت پیدا نشد", 404)
+    except (ValidationError, IntegrityError):
+        return _failure("invalid_site", "اطلاعات سایت معتبر نیست", 400)
+    return Response(_site_json(item), status=201 if site_id is None else 200)
 
 
 @api_view(["GET", "POST", "PATCH"])
@@ -537,17 +633,31 @@ def departments(request, department_id: int | None = None):
         return _failure("invalid_payload", "کد، نام و شرکت الزامی است", 400)
     if not isinstance(data["code"], str) or not isinstance(data["name"], str):
         return _failure("invalid_payload", "کد و نام باید متن باشند", 400)
-    item = Department.objects.filter(pk=department_id).first() if department_id else Department()
-    if item is None:
-        raise Http404
     try:
-        item.company = Company.objects.get(pk=data["companyId"])
-        item.code, item.name = data["code"].strip(), data["name"].strip()
-        item.parent = Department.objects.get(pk=data["parentId"]) if data.get("parentId") else None
-        item.full_clean()
-        item.save()
+        with transaction.atomic():
+            item = (
+                Department.objects.select_for_update().filter(pk=department_id).first()
+                if department_id else Department()
+            )
+            if item is None:
+                raise Http404
+            before = audit_services.snapshot(item) if item.pk is not None else None
+            item.company = Company.objects.get(pk=data["companyId"])
+            item.code, item.name = data["code"].strip(), data["name"].strip()
+            item.parent = Department.objects.get(pk=data["parentId"]) if data.get("parentId") else None
+            item.full_clean()
+            item.save()
+            audit_services.record_model_change(
+                actor=request.user,
+                origin="admin",
+                action="department.create" if before is None else "department.update",
+                instance=item,
+                before=before,
+            )
     except (Company.DoesNotExist, Department.DoesNotExist):
         return _failure("related_object_not_found", "شرکت یا واحد والد پیدا نشد", 404)
+    except Http404:
+        raise
     except (ValidationError, IntegrityError):
         return _failure("invalid_department", "اطلاعات واحد معتبر نیست", 400)
     return Response(_department_json(item), status=201 if department_id is None else 200)
@@ -592,19 +702,56 @@ def audit_events(request):
     if is_admin:
         rows = AuditEvent.objects.all()
     elif context.has_role("hr"):
-        request_ids = scoped_hr_leave_requests(context).values("pk")
-        rows = AuditEvent.objects.filter(entity="LeaveRequest", entity_id__in=request_ids)
+        employee_ids = hr_operation_employees(context).values("pk")
+
+        def audit_ids(queryset):
+            return queryset.order_by().annotate(
+                audit_id=Cast("pk", output_field=CharField()),
+            ).values("audit_id")
+
+        request_ids = audit_ids(LeaveRequest.objects.filter(employee_id__in=employee_ids))
+        contract_ids = audit_ids(ContractPeriod.objects.filter(employee_id__in=employee_ids))
+        note_ids = audit_ids(BradfordNote.objects.filter(employee_id__in=employee_ids))
+        comment_ids = audit_ids(
+            LeaveRequestComment.objects.filter(request__employee_id__in=employee_ids),
+        )
+        attachment_ids = audit_ids(
+            LeaveRequestAttachment.objects.filter(request__employee_id__in=employee_ids),
+        )
+        entitlement_event_ids = audit_ids(
+            EntitlementEvent.objects.filter(entitlement__employee_id__in=employee_ids),
+        )
+        employee_id_strings = EmployeeProfile.objects.filter(
+            pk__in=employee_ids,
+        ).order_by().annotate(
+            audit_id=Cast("pk", output_field=CharField()),
+        ).values("audit_id")
+        invitation_ids = audit_ids(
+            EmployeeInvitation.objects.filter(employee_id__in=employee_ids),
+        )
+        rows = AuditEvent.objects.filter(
+            Q(entity="LeaveRequest", entity_id__in=request_ids)
+            | Q(entity="EmployeeProfile", entity_id__in=employee_id_strings)
+            | Q(entity="EmployeeInvitation", entity_id__in=invitation_ids)
+            | Q(entity="ContractPeriod", entity_id__in=contract_ids)
+            | Q(entity="BradfordNote", entity_id__in=note_ids)
+            | Q(entity="LeaveRequestComment", entity_id__in=comment_ids)
+            | Q(entity="LeaveRequestAttachment", entity_id__in=attachment_ids)
+            | Q(entity="EntitlementEvent", entity_id__in=entitlement_event_ids)
+        )
     else:
         return _failure("permission_denied", "مشاهده حسابرسی مجاز نیست", 403)
     rows = rows.select_related("actor").order_by("-created_at", "-pk")[:500]
     return Response([{
-        "id": item.pk, "actorName": (
+        "id": item.pk, "actorId": item.actor_id, "actorName": (
             item.actor.get_full_name() or item.actor.get_username() if item.actor_id else None
         ), "action": item.action, "entity": item.entity, "entityId": item.entity_id,
-        "reason": item.reason, "result": item.result, "createdAt": item.created_at.isoformat(),
+        "reason": item.reason if is_admin else "",
+        "result": item.result, "createdAt": item.created_at.isoformat(),
         "before": item.before if is_admin else None,
         "after": item.after if is_admin else None,
         "correlationId": item.correlation_id if is_admin else None,
+        "source": item.source if is_admin else "",
     } for item in rows])
 
 
@@ -832,9 +979,31 @@ def bradford_notes(request):
     body = data["body"]
     if not isinstance(body, str) or not body.strip() or len(body) > 4000:
         return _failure("invalid_note", "متن یادداشت الزامی و حداکثر ۴۰۰۰ نویسه است", 400)
-    note, _ = BradfordNote.objects.update_or_create(
-        employee=employee, defaults={"body": body.strip(), "updated_by": request.user},
-    )
+    with transaction.atomic():
+        note = BradfordNote.objects.select_for_update().filter(employee=employee).first()
+        if note is None:
+            before = None
+            note = BradfordNote.objects.create(
+                employee=employee, body=body.strip(), updated_by=request.user,
+            )
+            action = "bradford_note.create"
+        else:
+            before = audit_services.snapshot(note)
+            note.body = body.strip()
+            note.updated_by = request.user
+            note.save(update_fields=["body", "updated_by", "updated_at"])
+            action = "bradford_note.update"
+        after = audit_services.snapshot(note)
+        after["contentChanged"] = True
+        audit_services.record_audit(
+            actor=request.user,
+            origin="admin" if _admin(context) else "hr",
+            action=action,
+            entity="BradfordNote",
+            entity_id=note.pk,
+            before=before,
+            after=after,
+        )
     return Response({
         "employeeId": note.employee_id, "body": note.body,
         "updatedAt": note.updated_at.isoformat(),
@@ -881,10 +1050,17 @@ def contracts(request, employee_id: int):
         ).filter(Q(end_date__isnull=True) | Q(end_date__gte=start)).exists()
         if overlaps:
             return _failure("contract_period_conflict", "بازه قرارداد با قرارداد ثبت‌شده هم‌پوشانی دارد", 409)
-        item = ContractPeriod.objects.create(
-            employee=employee, start_date=start, end_date=end,
-            work_days=days, contract_percent=percent, created_by=request.user,
-        )
+        with transaction.atomic():
+            item = ContractPeriod.objects.create(
+                employee=employee, start_date=start, end_date=end,
+                work_days=days, contract_percent=percent, created_by=request.user,
+            )
+            audit_services.record_model_change(
+                actor=request.user,
+                origin="admin" if _admin(context) else "hr",
+                action="contract_period.create",
+                instance=item,
+            )
     except (ValueError, TypeError, InvalidOperation):
         return _failure("invalid_contract", "بازه، روزهای کاری یا درصد قرارداد معتبر نیست", 400)
     return Response(_contract_json(item), status=201)
@@ -927,10 +1103,17 @@ def request_attachments(request, request_id: int):
     if upload.content_type != content_type or upload.read(len(signature)) != signature:
         return _failure("invalid_attachment", "نوع یا محتوای فایل با پسوند آن سازگار نیست", 400)
     upload.seek(0)
-    attachment = LeaveRequestAttachment.objects.create(
-        request=row, file=upload, file_name=file_name, content_type=content_type,
-        file_size=upload.size, uploaded_by=request.user,
-    )
+    with transaction.atomic():
+        attachment = LeaveRequestAttachment.objects.create(
+            request=row, file=upload, file_name=file_name, content_type=content_type,
+            file_size=upload.size, uploaded_by=request.user,
+        )
+        audit_services.record_model_change(
+            actor=request.user,
+            origin="hr" if context.has_role("hr") else "employee",
+            action="leave_request.attachment_added",
+            instance=attachment,
+        )
     return Response({
         "id": attachment.pk, "fileName": attachment.file_name,
         "sizeLabel": f"{max(1, round(attachment.file_size / 1024))} KB",

@@ -44,6 +44,7 @@ from .frontend_api_views import (
     request_attachment_download,
     request_attachments,
     settings_api,
+    sites,
 )
 from .workflow_views import (
     leave_request_action,
@@ -86,6 +87,8 @@ urlpatterns = [
     path("employees/<int:employee_id>/contract-periods/", contracts, name="employee-contracts"),
     path("companies/", companies, name="companies"),
     path("companies/<int:company_id>/", companies, name="company-detail"),
+    path("sites/", sites, name="sites"),
+    path("sites/<int:site_id>/", sites, name="site-detail"),
     path("departments/", departments, name="departments"),
     path("departments/<int:department_id>/", departments, name="department-detail"),
     path("coverage/", coverage, name="coverage"),

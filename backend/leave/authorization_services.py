@@ -3,9 +3,9 @@ from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
 from django.http import Http404
 
+from . import audit_services
 from .authorization import MANAGE_ROLE_ASSIGNMENTS, authorization_context, has_permission
 from .models import (
-    AuditEvent,
     Company,
     Department,
     EmployeeProfile,
@@ -45,23 +45,11 @@ def grant_role_assignment(*, actor, user_id: int, role: str, scope: str,
         created_by=actor,
     )
     assignment.save()
-    AuditEvent.objects.create(
+    audit_services.record_model_change(
         actor=actor,
-        origin="authorization",
         action="role.assignment.granted",
-        entity="RoleAssignment",
-        entity_id=str(assignment.pk),
-        before=None,
-        after={
-            "userId": target_user.pk,
-            "role": assignment.role,
-            "scope": assignment.scope,
-            "companyId": assignment.company_id,
-            "siteId": assignment.site_id,
-            "departmentId": assignment.department_id,
-            "employeeId": assignment.employee_id,
-        },
-        reason="",
+        instance=assignment,
+        origin="authorization",
     )
     return assignment
 
@@ -80,15 +68,7 @@ def revoke_role_assignment(*, actor, assignment_id: int) -> None:
         raise Http404
     if assignment.user_id == actor.pk:
         raise ValidationError({"assignment": "نقش‌های خود را نمی‌توانید لغو کنید"})
-    before = {
-        "userId": assignment.user_id,
-        "role": assignment.role,
-        "scope": assignment.scope,
-        "companyId": assignment.company_id,
-        "siteId": assignment.site_id,
-        "departmentId": assignment.department_id,
-        "employeeId": assignment.employee_id,
-    }
+    before = audit_services.snapshot(assignment)
     if assignment.role == RoleAssignment.ROLE_ADMIN:
         active_admins = [
             item for item in active_assignments
@@ -100,15 +80,12 @@ def revoke_role_assignment(*, actor, assignment_id: int) -> None:
     assignment.is_active = False
     assignment.revoked_by = actor
     assignment.save(update_fields=["is_active", "revoked_by", "updated_at"])
-    AuditEvent.objects.create(
+    audit_services.record_model_change(
         actor=actor,
-        origin="authorization",
         action="role.assignment.revoked",
-        entity="RoleAssignment",
-        entity_id=str(assignment.pk),
+        instance=assignment,
+        origin="authorization",
         before=before,
-        after=None,
-        reason="",
     )
 
 

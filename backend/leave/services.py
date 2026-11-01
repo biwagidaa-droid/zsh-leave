@@ -10,6 +10,7 @@ from django.db import IntegrityError, transaction
 from django.utils import timezone
 
 from zsh_core import workflow as wf
+from . import audit_services
 from .authorization import HR, authorization_context, can_decide_leave_request, scoped_leave_requests
 from .calendar_services import calculate_working_days, resolve_policy_version
 from .entitlement_services import (
@@ -19,7 +20,6 @@ from .entitlement_services import (
     transition_request_ledger,
 )
 from .models import (
-    AuditEvent,
     EmployeeProfile,
     LeaveRequest,
     LeaveRequestComment,
@@ -43,11 +43,22 @@ def _origin(actor_role: str) -> str:
 def _log(req, user, role, event, from_s, to_s, reason="", *, before=None, after=None):
     LeaveRequestEvent.objects.create(request=req, actor=user, origin=_origin(role), event=event,
                                      from_status=from_s, to_status=to_s, reason=reason)
-    AuditEvent.objects.create(actor=user, origin=_origin(role), action=f"leave.{event}",
-                              entity="LeaveRequest", entity_id=str(req.pk),
-                              before=before or {"status": from_s},
-                              after=after or {"status": to_s},
-                              reason="" if req.leave_type.confidential else reason)
+    audit_services.record_audit(
+        actor=user, origin=_origin(role), action=f"leave.{event}",
+        entity="LeaveRequest", entity_id=req.pk,
+        before=before if before is not None else {"status": from_s},
+        after=after if after is not None else {
+            "status": to_s,
+            "employee_id": req.employee_id,
+            "leave_type_id": req.leave_type_id,
+            "policy_version_id": req.policy_version_id,
+            "start_date": req.start_date,
+            "end_date": req.end_date,
+            "working_days": req.working_days,
+            "replacement_id": req.replacement_id,
+            "supersedes_id": req.supersedes_id,
+        },
+    )
 
 
 def run_idempotent(*, user, key: str, operation: str, payload: dict, model, callback):
@@ -436,6 +447,12 @@ def add_comment(*, request_id: int, user, body: str) -> LeaveRequestComment:
     )
     comment = LeaveRequestComment.objects.create(
         request=req, actor=user, body=body.strip(),
+    )
+    audit_services.record_model_change(
+        actor=user,
+        origin=_origin(role),
+        action="leave_request.comment_added",
+        instance=comment,
     )
     _log(
         req, user, role, "comment", req.status, req.status,

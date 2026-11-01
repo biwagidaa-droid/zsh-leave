@@ -16,7 +16,8 @@ from django.core.validators import validate_email
 from django.db import transaction
 from django.utils import timezone
 
-from .models import AuditEvent, EmployeeInvitation, EmployeeProfile
+from . import audit_services
+from .models import EmployeeInvitation, EmployeeProfile
 
 TOKEN_PATTERN = re.compile(r"^[A-Za-z0-9_-]{43}$")
 ACTIVE_INVITATION_STATUSES = (
@@ -84,14 +85,21 @@ def account_access_allowed(user, *, on_date=None) -> bool:
 
 
 def _audit(*, action: str, employee_id: int | None, actor=None, result="ok"):
-    AuditEvent.objects.create(
+    profile = EmployeeProfile.objects.filter(pk=employee_id).first() if employee_id else None
+    invitation = None
+    if profile is not None and action.startswith("invitation."):
+        invitation = EmployeeInvitation.objects.filter(employee_id=profile.pk).order_by("-pk").first()
+    instance = invitation or profile
+    audit_services.record_audit(
         actor=actor,
         origin="auth",
         action=action,
-        entity="EmployeeInvitation" if employee_id is not None else "Invitation",
-        entity_id=str(employee_id) if employee_id is not None else "",
+        entity="EmployeeInvitation" if invitation is not None else (
+            "EmployeeProfile" if profile is not None else "Invitation"
+        ),
+        entity_id=instance.pk if instance is not None else "",
         before=None,
-        after=None,
+        after=audit_services.snapshot(instance) if instance is not None else None,
         reason="",
         result=result,
     )

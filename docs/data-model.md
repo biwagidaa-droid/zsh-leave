@@ -20,7 +20,7 @@
 | PublicHoliday / PublicHolidayHistory | تعطیلات ثبت‌شده دستی (شمسی؛ سالانه یا یک‌بار) و تاریخچه append-only | P | UNIQUE(scope, jalali_year, month, day) با nulls_distinct=False (نیازمند PostgreSQL ≥ 15)؛ اسکوپ: ملی/شرکت/منطقه |
 | Notification | اعلان داخلی | C | dedupe_key یکتا؛ فقط متن بازنویسی‌شده (redacted) |
 | EmailDeliveryLog | نتیجه ارسال | I | وضعیت، خطا (بدون محتوای حساس) |
-| AuditEvent | حسابرسی مرکزی | C | append-only؛ actor, action, entity, before/after (redacted), reason, result, origin |
+| AuditEvent | حسابرسی مرکزی | C | append-only؛ actor, action, entity/ID, redacted before/after, reason/result/origin, request correlation ID, server-derived source |
 | BackgroundJobExecution | وضعیت Jobها | I | job, started, finished, status, error |
 | SystemSetting | تنظیمات داشبورد مدیریت؛ مقدار فقط با `settings_schema` اعتبارسنجی و ذخیره می‌شود | I | key یکتا؛ تغییر با دلیل الزامی → AuditEvent؛ مقدار خراب هنگام خواندن خطا می‌دهد |
 | Role / UserRole | نقش‌های چندگانه با scope (شرکت/واحد) | I | یکتا (user, role, scope) |

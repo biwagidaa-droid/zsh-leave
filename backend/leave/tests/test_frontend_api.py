@@ -93,6 +93,8 @@ class FrontendApiTests(TestCase):
             "/api/v1/employees/1/contract-periods/": "employee-contracts",
             "/api/v1/companies/": "companies",
             "/api/v1/companies/1/": "company-detail",
+            "/api/v1/sites/": "sites",
+            "/api/v1/sites/1/": "site-detail",
             "/api/v1/departments/": "departments",
             "/api/v1/departments/1/": "department-detail",
             "/api/v1/coverage/": "coverage",
