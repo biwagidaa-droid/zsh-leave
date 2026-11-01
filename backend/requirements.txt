@@ -1,7 +1,8 @@
-# نسخه‌ها باید روی ماشین دارای شبکه راستی‌آزمایی و قفل (pip-compile) شوند؛ از این محیط قابل بررسی نبود.
+# Versions are intentionally conservative and aligned to the Django 5.2 LTS line.
 Django>=5.2,<5.3
 djangorestframework>=3.15,<4
 psycopg[binary]>=3.2,<4
 drf-spectacular>=0.27,<1
 gunicorn>=22
 openpyxl>=3.1,<4
+argon2-cffi>=23.2,<26
