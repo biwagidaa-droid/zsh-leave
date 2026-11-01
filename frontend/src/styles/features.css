@@ -1,0 +1,90 @@
+/* سبک‌های قابلیت‌های جدید: انتخابگر نوع مدت، مهلت، اعلان‌ها، نمودارها، Bradford.
+   فقط از متغیرهای tokens.css استفاده می‌کند تا با پوسته تیره سازگار بماند. */
+
+/* ───────── انتخابگر قطعه‌ای ───────── */
+.segmented { display: inline-flex; padding: 3px; gap: 3px; border: 1px solid var(--line); border-radius: 999px; background: var(--bg-muted); margin-bottom: 14px; max-width: 100%; }
+.segmented button { border: 0; background: transparent; border-radius: 999px; padding: 6px 18px; min-height: 36px; transition: background var(--motion); }
+.segmented button:hover:not(:disabled):not([aria-checked="true"]) { background: var(--bg-elev); }
+.segmented button[aria-checked="true"] { background: var(--primary); color: var(--primary-ink); font-weight: 600; }
+.segmented button:disabled { opacity: .5; }
+
+/* ───────── مرخصی ساعتی ───────── */
+.time-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.duration-summary { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; padding: 10px 14px; border: 1px dashed var(--line); border-radius: var(--radius-sm); background: var(--bg-muted); margin-bottom: 12px; }
+.duration-summary strong { font-size: 1.05rem; }
+.ltr-time { direction: ltr; text-align: center; font-variant-numeric: tabular-nums; }
+.kind-tag { font-size: .75rem; font-weight: 600; color: var(--info); background: var(--info-bg); border-radius: 999px; padding: 1px 8px; margin-inline-start: 6px; white-space: nowrap; }
+
+/* ───────── مهلت تأیید ───────── */
+.deadline { display: inline-flex; align-items: center; gap: 6px; font-size: .82rem; white-space: nowrap; }
+.deadline .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); }
+.deadline.warn .dot { background: var(--warn); }
+.deadline.danger .dot { background: var(--danger); }
+.deadline.muted .dot { background: var(--ink-soft); }
+
+@media (max-width: 640px) {
+  .time-row { grid-template-columns: 1fr; }
+}
+
+/* ───────── اعلان‌ها ───────── */
+.bell { position: relative; display: inline-grid; place-items: center; text-decoration: none; color: inherit; }
+.bell:hover { text-decoration: none; }
+.bell-badge {
+  position: absolute; top: -4px; inset-inline-end: -4px; min-width: 18px; height: 18px; padding: 0 5px;
+  border-radius: 999px; background: var(--danger); color: var(--on-danger); font-size: .7rem; font-weight: 700;
+  display: grid; place-items: center; line-height: 1; border: 2px solid var(--bg-elev);
+}
+html[data-theme="dark"] .bell-badge { background: #c0392b; color: #fff; }
+.nav-badge {
+  margin-inline-start: auto; min-width: 20px; height: 20px; padding: 0 6px; border-radius: 999px;
+  background: #c0392b; color: #fff; font-size: .72rem; font-weight: 700; display: inline-grid; place-items: center;
+}
+.nav a { display: flex; align-items: center; }
+.notif-item .btn { flex: none; }
+.notif-desktop { margin: 8px 0 16px; }
+.notif-kind-group { margin-bottom: 10px; }
+.range { width: 100%; accent-color: var(--primary); min-height: 32px; }
+
+/* ───────── نمودارها ───────── */
+.chart { position: relative; margin: 0; }
+.chart-body { display: flex; gap: 24px; align-items: center; flex-wrap: wrap; justify-content: center; }
+.chart-svg { width: min(100%, 240px); height: auto; flex: none; overflow: visible; }
+.chart-svg.wide { width: 100%; max-width: none; }
+.chart-scroll { overflow-x: auto; }
+.chart-shadow { filter: drop-shadow(0 1px 1px rgba(28, 35, 36, .10)) drop-shadow(0 6px 10px rgba(28, 35, 36, .14)); }
+html[data-theme="dark"] .chart-shadow { filter: drop-shadow(0 1px 1px rgba(0, 0, 0, .35)) drop-shadow(0 6px 12px rgba(0, 0, 0, .45)); }
+.chart-slice, .chart-bar { cursor: pointer; transform-box: view-box; transform-origin: 100px 100px; animation: chart-in .55s cubic-bezier(.2, .8, .2, 1) both; transition: transform var(--motion), opacity var(--motion), filter var(--motion); outline: none; }
+.chart-bar { transform-box: fill-box; transform-origin: 50% 100%; animation-name: chart-grow; }
+.chart-slice.dim, .chart-bar.dim { opacity: .55; }
+.chart-slice.on, .chart-bar.on { filter: brightness(1.06); }
+.chart-slice:focus-visible, .chart-bar:focus-visible { stroke: var(--ink); stroke-width: 3; }
+@keyframes chart-in { from { opacity: 0; transform: scale(.86); } to { opacity: 1; } }
+@keyframes chart-grow { from { opacity: .2; transform: scaleY(.05); } to { opacity: 1; } }
+.chart-center-value { font-size: 26px; font-weight: 700; fill: var(--ink); }
+.chart-center-label { font-size: 11px; fill: var(--ink-soft); }
+.chart-grid { stroke: var(--chart-track); stroke-width: 1; }
+.chart-axis { font-size: 10px; fill: var(--ink-soft); }
+.chart-legend { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; min-width: 200px; flex: 1 1 200px; max-width: 360px; }
+.chart-legend li { display: grid; grid-template-columns: 12px 1fr auto auto; gap: 10px; align-items: center; padding: 5px 8px; border-radius: 8px; transition: background var(--motion); }
+.chart-legend li.on, .chart-legend li:hover { background: var(--bg-muted); }
+.chart-legend i { width: 12px; height: 12px; border-radius: 4px; }
+.chart-legend .val { font-weight: 700; font-variant-numeric: tabular-nums; }
+.chart-legend .pct { color: var(--ink-soft); font-size: .82rem; min-width: 46px; text-align: end; font-variant-numeric: tabular-nums; }
+.chart-tip {
+  position: absolute; z-index: 5; pointer-events: none; transform: translate(-50%, calc(-100% - 12px));
+  background: var(--ink); color: var(--bg-elev); border-radius: 10px; padding: 8px 12px; font-size: .82rem; line-height: 1.5;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, .18), 0 10px 24px rgba(0, 0, 0, .22); white-space: nowrap;
+}
+.chart-tip strong { display: block; }
+.chart-skeleton { display: grid; place-items: center; min-height: 200px; }
+.sk-circle { width: 170px; height: 170px; border-radius: 50%; background: linear-gradient(90deg, var(--bg-muted), var(--line), var(--bg-muted)); background-size: 200% 100%; animation: sk-shimmer 1.4s linear infinite; -webkit-mask: radial-gradient(circle 52px at center, transparent 98%, #000 100%); mask: radial-gradient(circle 52px at center, transparent 98%, #000 100%); }
+.sk-bars { display: flex; align-items: flex-end; gap: 14px; height: 160px; }
+.sk-bars i { width: 26px; border-radius: 6px 6px 0 0; background: linear-gradient(90deg, var(--bg-muted), var(--line), var(--bg-muted)); background-size: 200% 100%; animation: sk-shimmer 1.4s linear infinite; }
+.sk-bars i:nth-child(1) { height: 40%; } .sk-bars i:nth-child(2) { height: 70%; } .sk-bars i:nth-child(3) { height: 55%; } .sk-bars i:nth-child(4) { height: 90%; } .sk-bars i:nth-child(5) { height: 62%; }
+@keyframes sk-shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+.view-switch { margin-bottom: 14px; }
+@media (max-width: 640px) { .chart-body { gap: 12px; } .chart-legend { max-width: none; } }
+
+/* ───────── Bradford ───────── */
+.link-btn { background: none; border: 0; padding: 0; color: var(--primary); text-decoration: underline; text-underline-offset: 3px; cursor: pointer; font-weight: 600; text-align: start; }
+.link-btn:hover { color: var(--primary-hover); }
