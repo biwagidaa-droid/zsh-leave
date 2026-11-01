@@ -15,8 +15,8 @@
 | LeaveRequestComment | بحث | C | request FK؛ در نوع محرمانه ممنوع برای غیر HR |
 | LeaveRequestEvent | تاریخچه درخواست، append-only | C | بدون UPDATE/DELETE (trigger) |
 | LeaveAttachment | پیوست | S | مسیر ذخیره تصادفی؛ sha256؛ mime بررسی‌شده؛ سقف اندازه/تعداد |
-| LeaveEntitlement | سهمیه (کارمند، نوع، سال) | C | UNIQUE(employee,type,year)؛ base, carry_over, manual_adjustment (decimal 5,1) |
-| EntitlementEvent | تاریخچه سهمیه، append-only | C | قبل/بعد/اختلاف/دلیل/عامل/source؛ کلید idempotency یکتا برای rollover |
+| LeaveEntitlement | تصویر تخصیص سهمیه (کارمند، نوع، سال) | C | UNIQUE(employee,type,year)؛ base, carry_over, manual_adjustment (decimal 5,1)، قابل تطبیق با دفترکل |
+| EntitlementEvent | دفترکل append-only سهمیه | C | تغییرات پایه/انتقال/اصلاح/رزرو/مصرف، request و reversal اختیاری، قبل/بعد/دلیل/عامل؛ کلید idempotency یکتا؛ قفل ردیف سهمیه |
 | PublicHoliday / PublicHolidayHistory | تعطیلات ثبت‌شده دستی (شمسی؛ سالانه یا یک‌بار) و تاریخچه append-only | P | UNIQUE(scope, jalali_year, month, day) با nulls_distinct=False (نیازمند PostgreSQL ≥ 15)؛ اسکوپ: ملی/شرکت/منطقه |
 | Notification | اعلان داخلی | C | dedupe_key یکتا؛ فقط متن بازنویسی‌شده (redacted) |
 | EmailDeliveryLog | نتیجه ارسال | I | وضعیت، خطا (بدون محتوای حساس) |
@@ -32,8 +32,9 @@
 ## فرمول مانده (قطعی، به‌همراه تصمیم C-3)
 ```
 کل = base + carry_over + manual_adjustment
-استفاده‌شده = Σ روز تأییدشده با status ∈ {APPROVED, WITHDRAWAL_PENDING}
-در انتظار   = Σ روز با status ∈ {PENDING, ESCALATED}
-مانده = کل − استفاده‌شده ;  قابل استفاده = کل − استفاده‌شده − در انتظار
+استفاده‌شده = Σ postingهای دفترکل مصرف (مانده statusهای APPROVED و WITHDRAWAL_PENDING)
+رزروشده     = Σ postingهای دفترکل رزرو (مانده statusهای PENDING و ESCALATED)
+مانده        = کل − استفاده‌شده
+قابل استفاده = کل − استفاده‌شده − رزروشده
 ```
-بازه‌های چندساله به‌ازای هر روز به سال مربوطه نسبت داده می‌شوند. فقط انواع `counts_against_balance` اثر دارند.
+هر تغییر سهمیه، رزرو، تأیید، آزادسازی، برگشت، انتقال و انقضا در یک تراکنش و با کلید idempotency ثبت می‌شود. رزرو و مصرف هرگز منفی نمی‌شوند؛ مقدار قابل استفاده می‌تواند طبق رفتار قبلی منفی باشد. درخواست‌های چندساله با تقویم سال مرخصی نسخه سیاست تقسیم می‌شوند. فقط انواع `counts_against_balance` اثر دارند. `LeaveEntitlement` projection تخصیص است؛ مدل و triggerهای DB نوشتن تخصیص بدون posting متناظر را رد می‌کنند و تغییر/حذف رویدادهای دفترکل ممنوع است. اختلاف projection و دفترکل reconciliation failure محسوب می‌شود.

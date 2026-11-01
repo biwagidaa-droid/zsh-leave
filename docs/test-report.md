@@ -1,6 +1,16 @@
 # گزارش آزمون
 
-تاریخ اجرا: ۲۸ اکتبر ۲۰۲۶ — محیط: Python 3 با کتابخانه استاندارد (`unittest`)
+## به‌روزرسانی Phase E (۱ نوامبر ۲۰۲۶)
+
+- مجموعه کامل Django روی SQLite: `ZSH_ENV=test python manage.py test` — ۱۷۱ تست، موفق؛ ۳ تست PostgreSQL-only رد شدند. هشدار SQLite درباره `nulls_distinct` از محدودیت شناخته‌شده backend است.
+- مجموعه کامل Django روی PostgreSQL 16: `ZSH_ENV=dev ... python manage.py test --keepdb` — ۱۷۱ تست، موفق؛ بدون ردشدن.
+- تست‌های دفترکل روی PostgreSQL: رزرو و تأیید هم‌زمان، idempotency، triggerهای append-only و projection، reconciliation، انتقال/انقضا، برگشت و گردش‌کار تأیید/لغو موفق شدند.
+- مهاجرت و backfill روی PostgreSQL از داده‌های pre-ledger اجرا شد: projection سهمیه ۲۰ + ۲ − ۱، رزرو ۲، مصرف ۳، مانده قابل استفاده ۱۶؛ reconciliation برابر بود.
+- `python manage.py makemigrations --check --dry-run` — بدون migration جاافتاده.
+
+## اجرای پایه سابق (۲۸ اکتبر ۲۰۲۶)
+
+محیط: Python 3 با کتابخانه استاندارد (`unittest`)
 دستور: `cd backend && python3 -m unittest discover -s tests -t .`
 
 ## اجرا شده
@@ -21,11 +31,12 @@
 مواردی که این تست‌ها واقعاً اثبات می‌کنند (فقط در سطح منطق خالص): تست نشت «Canary» — مقدار نوع/دلیل/یادداشت محرمانه در خروجی serialize، تقویم و متن اعلان برای هیچ نقش غیرمجاز (کارمند، مدیر، همکار، جانشین، مدیر سامانه، گزارش‌خوان ارشد، HR شرکت دیگر) ظاهر نشد، حتی با روشن بودن تنظیمات افشا؛ خنثی‌سازی Formula Injection در CSV و XLSX (با بازخوانی فایل XLSX واقعی)؛ ورود گروهی همه‌یاهیچ با گزارش خط به خط.
 **هنوز اثبات نشده:** اعمال همین قواعد در لایه API/Serializer/Export واقعی؛ آن‌ها باید از همین توابع عبور کنند و تست یکپارچه خودشان را لازم دارند.
 
-## نوشته شده ولی اجرا نشده
-- `backend/leave/models.py`, `services.py`, `admin_services.py`, `config/settings.py`: فقط `py_compile` (نحو) پاس شد. Django و PostgreSQL در این محیط نیست؛ هیچ migration تولید نشده و هیچ تست پایگاه داده اجرا نشده است. درستی قیود (CheckConstraint/UniqueConstraint شرطی)، قفل ردیف و تراکنش‌ها **اثبات‌نشده** است و ممکن است به اصلاح نیاز داشته باشد (مثلاً نام آرگومان `condition` در CheckConstraint و `nulls_distinct` در UniqueConstraint به نسخه Django/PostgreSQL وابسته‌اند: Django ≥ 5.1 و PostgreSQL ≥ 15).
+## موارد خارج از Phase E که همچنان اجرا نشده‌اند
+- E2E فرانت‌اند، ایمیل، Jobهای عملیاتی و آزمون واقعی backup/restore در استقرار.
+- تست نشت محرمانگی و کنترل مجوز در تمام مسیرهای API/Export واقعی.
 
-## هنوز نوشته نشده
-تست‌های Django (هم‌زمانی، مجوزها، نشت محرمانگی)، API، Frontend، Jobها، ایمیل، Export، Docker، Backup/Restore، جریان اصلاحیه (start_amendment/resolve) در لایه سرویس، سرویس سهمیه و rollover در DB.
+## خارج از دامنه Phase E
+رابط/API مدیریت سهمیه، اجرای زمان‌بندی‌شده carry-forward/expiration، Frontend و استقرار/عملیات محصول.
 
 ## محدودیت‌های اعتبار
 - تبدیل شمسی با قاعده چرخه ۳۳ساله و فقط برای ۱۳۴۳–۱۴۷۲؛ با تقویم رسمی کامل مقایسه نشده (فقط نوروز ۱۳۹۹–۱۴۰۵ و کبیسه‌های شناخته‌شده).

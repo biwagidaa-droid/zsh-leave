@@ -19,6 +19,7 @@ class RoleAssignmentDataMigrationTests(TransactionTestCase):
         Company = old_apps.get_model("leave", "Company")
         EmployeeProfile = old_apps.get_model("leave", "EmployeeProfile")
         company = Company.objects.create(code="MIGRATE", name="Migration Company")
+        self.company_id = company.pk
         hr_user = User.objects.create(
             username="migrated-hr", is_active=True,
         )
@@ -66,7 +67,7 @@ class RoleAssignmentDataMigrationTests(TransactionTestCase):
 
     def test_existing_roles_are_mapped_only_with_valid_organization_scope(self):
         self.assertIn(("migrated-admin", "admin", "global", None), self.assignments)
-        self.assertIn(("migrated-hr", "hr", "company", 1), self.assignments)
-        self.assertIn(("migrated-exec", "exec", "company", 1), self.assignments)
+        self.assertIn(("migrated-hr", "hr", "company", self.company_id), self.assignments)
+        self.assertIn(("migrated-exec", "exec", "company", self.company_id), self.assignments)
         self.assertNotIn("unmapped-hr", {row[0] for row in self.assignments})
         self.assertEqual(self.migrated_audit_count, 3)

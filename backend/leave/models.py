@@ -391,9 +391,29 @@ class LeaveEntitlement(models.Model):
         constraints = [models.UniqueConstraint(fields=["employee", "leave_type", "year"],
                                                name="uniq_entitlement")]
 
+    def save(self, *args, **kwargs):
+        fields = set(kwargs.get("update_fields") or (
+            "base_days", "carry_over_days", "manual_adjustment",
+        ))
+        allocation_fields = {"base_days", "carry_over_days", "manual_adjustment"}
+        if not getattr(self, "_ledger_write", False) and fields & allocation_fields:
+            if self.pk is None:
+                if any(getattr(self, field) != 0 for field in allocation_fields):
+                    raise PermissionError("تخصیص سهمیه باید از طریق دفترکل ثبت شود")
+            else:
+                using = kwargs.get("using") or self._state.db
+                previous = type(self).objects.using(using).filter(pk=self.pk).values(
+                    *allocation_fields,
+                ).first()
+                if previous and any(
+                    getattr(self, field) != previous[field] for field in allocation_fields
+                ):
+                    raise PermissionError("تغییر سهمیه باید از طریق دفترکل ثبت شود")
+        super().save(*args, **kwargs)
+
 
 class EntitlementEvent(models.Model):
-    """تاریخچه سهمیه؛ append-only."""
+    """Append-only entitlement journal; allocation fields are the allocation projection."""
     entitlement = models.ForeignKey(LeaveEntitlement, on_delete=models.PROTECT)
     actor = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, on_delete=models.PROTECT)
     kind = models.CharField(max_length=32)            # adjust | rollover | import | set
@@ -401,7 +421,34 @@ class EntitlementEvent(models.Model):
     after = models.JSONField()
     reason = models.TextField()
     idempotency_key = models.CharField(max_length=128, unique=True, null=True, blank=True)
+    base_delta = models.DecimalField(max_digits=8, decimal_places=1, default=0)
+    carry_over_delta = models.DecimalField(max_digits=8, decimal_places=1, default=0)
+    manual_adjustment_delta = models.DecimalField(max_digits=8, decimal_places=1, default=0)
+    reserved_delta = models.DecimalField(max_digits=8, decimal_places=1, default=0)
+    used_delta = models.DecimalField(max_digits=8, decimal_places=1, default=0)
+    request = models.ForeignKey(
+        "LeaveRequest", null=True, blank=True, on_delete=models.PROTECT,
+        related_name="entitlement_events",
+    )
+    reversal_of = models.OneToOneField(
+        "self", null=True, blank=True, on_delete=models.PROTECT,
+        related_name="reversal",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["entitlement", "created_at"], name="ent_event_ent_created_idx"),
+            models.Index(fields=["request", "kind"], name="ent_event_req_kind_idx"),
+        ]
+
+    def save(self, *args, **kwargs):
+        if self.pk is not None:
+            raise PermissionError("رکورد دفترکل قابل ویرایش نیست")
+        super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise PermissionError("رکورد دفترکل قابل حذف نیست")
 
 
 class LeaveRequest(models.Model):

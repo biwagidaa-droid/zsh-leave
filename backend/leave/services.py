@@ -12,6 +12,12 @@ from django.utils import timezone
 from zsh_core import workflow as wf
 from .authorization import HR, authorization_context, can_decide_leave_request, scoped_leave_requests
 from .calendar_services import calculate_working_days, resolve_policy_version
+from .entitlement_services import (
+    internal_idempotency_key,
+    release_request,
+    reserve_request,
+    transition_request_ledger,
+)
 from .models import (
     AuditEvent,
     EmployeeProfile,
@@ -120,13 +126,19 @@ def _role_for_employee(context, employee: EmployeeProfile) -> str:
     raise wf.PermissionDenied("کاربر مجوز ثبت درخواست برای این کارمند را ندارد")
 
 
+def _locked_scoped_requests(context):
+    return LeaveRequest.objects.filter(
+        pk__in=scoped_leave_requests(context).values("pk"),
+    )
+
+
 @transaction.atomic
 def submit_request(*, user, employee: EmployeeProfile, leave_type: LeaveType,
                    start, end, working_days: Decimal | None = None, reason: str = "",
                    replacement: EmployeeProfile | None = None,
                    manager_away: bool = False, policy_allow_past: bool = False) -> LeaveRequest:
     # قفل ردیف کارمند: ثبت‌های هم‌زمان یک کارمند سریالی می‌شوند (جلوگیری از هم‌پوشانی)
-    employee = EmployeeProfile.objects.select_for_update().select_related(
+    employee = EmployeeProfile.objects.select_for_update(of=("self",)).select_related(
         "company", "site", "department", "manager",
     ).get(pk=employee.pk)
     context = authorization_context(user)
@@ -159,6 +171,14 @@ def submit_request(*, user, employee: EmployeeProfile, leave_type: LeaveType,
         decided_by=user if status == wf.APPROVED else None,
         decided_at=timezone.now() if status == wf.APPROVED else None)
     _log(req, user, role, "submit", "", status, "")
+    transition_request_ledger(
+        request=req,
+        old_status="",
+        new_status=status,
+        actor=user,
+        reason=reason,
+        idempotency_key=f"request:{req.pk}:submit",
+    )
     return req
 
 
@@ -167,7 +187,7 @@ def correct_request(*, request_id: int, user, leave_type: LeaveType, start, end,
                     reason: str = "", replacement: EmployeeProfile | None = None,
                     working_days: Decimal | None = None) -> LeaveRequest:
     context = authorization_context(user)
-    req = scoped_leave_requests(context).select_for_update().select_related(
+    req = _locked_scoped_requests(context).select_for_update(of=("self",)).select_related(
         "employee__company", "employee__site", "employee__department", "leave_type",
     ).get(pk=request_id)
     role = _role_for_employee(context, req.employee)
@@ -194,6 +214,12 @@ def correct_request(*, request_id: int, user, leave_type: LeaveType, start, end,
     if overlap.exists():
         raise wf.ConflictError("با درخواست دیگری برای همین کارمند هم‌پوشانی دارد")
 
+    release_request(
+        request=req,
+        actor=user,
+        reason="اصلاح درخواست",
+        idempotency_key=internal_idempotency_key(f"request:{req.pk}:correction-release"),
+    )
     before = {
         "leave_type_id": req.leave_type_id,
         "start_date": req.start_date.isoformat(),
@@ -220,6 +246,12 @@ def correct_request(*, request_id: int, user, leave_type: LeaveType, start, end,
             "reason_changed": reason_changed,
         },
     )
+    reserve_request(
+        request=req,
+        actor=user,
+        reason="اصلاح درخواست",
+        idempotency_key=internal_idempotency_key(f"request:{req.pk}:correction-reserve"),
+    )
     return req
 
 
@@ -227,7 +259,7 @@ def correct_request(*, request_id: int, user, leave_type: LeaveType, start, end,
 def create_amendment(*, request_id: int, user, start, end, reason: str = "",
                      replacement: EmployeeProfile | None = None) -> LeaveRequest:
     context = authorization_context(user)
-    original = scoped_leave_requests(context).select_for_update().select_related(
+    original = _locked_scoped_requests(context).select_for_update(of=("self",)).select_related(
         "employee__company", "employee__site", "employee__department", "leave_type",
     ).get(pk=request_id)
     role = _role_for_employee(context, original.employee)
@@ -238,7 +270,7 @@ def create_amendment(*, request_id: int, user, start, end, reason: str = "",
     )
     wf.can_start_amendment(original.status, amend_context)
 
-    employee = EmployeeProfile.objects.select_for_update().select_related(
+    employee = EmployeeProfile.objects.select_for_update(of=("self",)).select_related(
         "company", "site", "department", "manager",
     ).get(pk=original.employee_id)
     replacement = replacement if replacement is not None else original.replacement
@@ -282,20 +314,37 @@ def create_amendment(*, request_id: int, user, start, end, reason: str = "",
         decided_at=timezone.now() if status == wf.APPROVED else None,
     )
     _log(amendment, user, role, "amend", "", status)
+    transition_request_ledger(
+        request=amendment,
+        old_status="",
+        new_status=status,
+        actor=user,
+        reason=reason,
+        idempotency_key=f"request:{amendment.pk}:amend",
+    )
     if status == wf.APPROVED:
+        original_old_status = original.status
         original.status = wf.CANCELLED
         original.decided_by = user
         original.decided_at = timezone.now()
         original.decision_comment = reason
         original.save()
         _log(original, user, role, "amend_approve", wf.APPROVED, wf.CANCELLED, reason)
+        transition_request_ledger(
+            request=original,
+            old_status=original_old_status,
+            new_status=original.status,
+            actor=user,
+            reason=reason,
+            idempotency_key=f"request:{original.pk}:amend-reversal",
+        )
     return amendment
 
 
 @transaction.atomic
 def apply_event(*, request_id: int, user, event: str, reason: str = "") -> LeaveRequest:
     context = authorization_context(user)
-    req = scoped_leave_requests(context).select_for_update().select_related(
+    req = _locked_scoped_requests(context).select_for_update(of=("self",)).select_related(
         "employee__company", "employee__site", "employee__department", "leave_type",
     ).get(pk=request_id)
     if req.employee_id == context.employee_id:
@@ -337,6 +386,14 @@ def apply_event(*, request_id: int, user, event: str, reason: str = "") -> Leave
         req.decided_by, req.decided_at, req.decision_comment = user, timezone.now(), reason
     req.save()
     _log(req, user, role, event, old, new, reason)
+    transition_request_ledger(
+        request=req,
+        old_status=old,
+        new_status=new,
+        actor=user,
+        reason=reason,
+        idempotency_key=f"request:{req.pk}:{event}",
+    )
     if original is not None and original_new_status is not None:
         original_old_status = original.status
         original.status = original_new_status
@@ -348,13 +405,21 @@ def apply_event(*, request_id: int, user, event: str, reason: str = "") -> Leave
             original, user, role, f"amendment_{event}", original_old_status,
             original_new_status, reason,
         )
+        transition_request_ledger(
+            request=original,
+            old_status=original_old_status,
+            new_status=original_new_status,
+            actor=user,
+            reason=reason,
+            idempotency_key=f"request:{original.pk}:amendment-{event}",
+        )
     return req
 
 
 @transaction.atomic
 def add_comment(*, request_id: int, user, body: str) -> LeaveRequestComment:
     context = authorization_context(user)
-    req = scoped_leave_requests(context).select_for_update().select_related(
+    req = _locked_scoped_requests(context).select_for_update(of=("self",)).select_related(
         "employee__company", "employee__site", "employee__department", "leave_type",
     ).get(pk=request_id)
     is_hr = context.has_scope(
