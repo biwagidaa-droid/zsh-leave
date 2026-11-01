@@ -18,6 +18,7 @@ from zsh_core import settings_schema
 from zsh_core.permissions import HR as POLICY_HR, Viewer, visible_balance_types
 from . import admin_services
 from . import audit_services
+from . import bradford_services
 from .authorization import (
     MANAGE_GLOBAL_LEAVE_TYPES, authorization_context, has_permission, hr_operation_employees,
     scoped_employees, scoped_hr_employees, scoped_hr_leave_requests,
@@ -1023,13 +1024,126 @@ def coverage(request):
     return Response(result)
 
 
+def _bradford_scope(context) -> list[dict]:
+    scope_keys = {
+        RoleAssignment.SCOPE_COMPANY: {"companyId": "company_id"},
+        RoleAssignment.SCOPE_SITE: {"companyId": "company_id", "siteId": "site_id"},
+        RoleAssignment.SCOPE_DEPARTMENT: {
+            "companyId": "company_id", "departmentId": "department_id",
+        },
+        RoleAssignment.SCOPE_EMPLOYEE: {
+            "companyId": "company_id", "employeeId": "employee_id",
+        },
+    }
+    return [
+        {
+            "type": assignment.scope,
+            **{
+                key: getattr(assignment, field)
+                for key, field in scope_keys[assignment.scope].items()
+            },
+        }
+        for assignment in context.assignments
+        if assignment.role == "hr"
+    ]
+
+
+def _bradford_report(request, context) -> Response:
+    scope = _bradford_scope(context)
+    today = organization_localdate()
+    try:
+        start, end = bradford_services.report_period(request.query_params, today)
+    except bradford_services.BradfordReportError as exc:
+        return Response({
+            "status": "invalid_request",
+            "reportingPeriod": None,
+            "policy": None,
+            "authorizedScope": scope,
+            "series": [],
+            "warnings": [],
+            "emptyStateReason": exc.code,
+            "error": {"code": exc.code, "message_fa": exc.message_fa},
+        }, status=exc.status)
+    try:
+        limit = int(request.query_params.get("limit", bradford_services.DEFAULT_PAGE_SIZE))
+        offset = int(request.query_params.get("offset", 0))
+        if not 1 <= limit <= bradford_services.MAX_PAGE_SIZE or offset < 0:
+            raise ValueError
+    except (TypeError, ValueError):
+        return Response({
+            "status": "invalid_request",
+            "reportingPeriod": {"from": start.isoformat(), "to": end.isoformat()},
+            "policy": None,
+            "authorizedScope": scope,
+            "series": [],
+            "warnings": [],
+            "emptyStateReason": "invalid_pagination",
+            "error": {
+                "code": "invalid_pagination",
+                "message_fa": "حد صفحه باید بین ۱ تا ۲۰۰ و offset نامنفی باشد",
+            },
+        }, status=400)
+
+    base = {
+        "reportingPeriod": {"from": start.isoformat(), "to": end.isoformat()},
+        "policy": {
+            "version": bradford_services.POLICY_VERSION,
+            "formula": "S^2 * D",
+            "description_fa": (
+                "S تعداد دوره‌های غیبت و D تعداد روزهای تقویمی غیبت در بازه است؛ "
+                "دوره‌های هم‌پوشان یا متصل به هم ادغام می‌شوند."
+            ),
+            "status": "provisional",
+        },
+        "authorizedScope": scope,
+    }
+    try:
+        result = bradford_services.calculate_bradford_report(
+            employees=scoped_hr_employees(context),
+            start=start,
+            end=end,
+            offset=offset,
+            limit=limit,
+        )
+    except bradford_services.BradfordReportError as exc:
+        is_configuration_error = exc.code in {
+            "bradford_policy_not_configured",
+            "bradford_disabled",
+            "invalid_bradford_configuration",
+            "unsupported_bradford_configuration",
+        }
+        return Response({
+            **base,
+            "policy": None if is_configuration_error else base["policy"],
+            "status": "configuration_error" if is_configuration_error else "unavailable",
+            "series": [],
+            "pagination": {"offset": offset, "limit": limit, "total": None},
+            "warnings": [{"code": exc.code, "message_fa": exc.message_fa}],
+            "emptyStateReason": exc.code,
+            "error": {"code": exc.code, "message_fa": exc.message_fa},
+        }, status=exc.status)
+
+    return Response({
+        **base,
+        "status": result["status"],
+        "series": result["series"],
+        "pagination": result["pagination"],
+        "warnings": result["warnings"],
+        "emptyStateReason": result["empty_state_reason"],
+    })
+
+
 @rate_limited("expensive_operation")
 @api_view(["GET"])
 def reports(request, kind: str):
     context = _context(request)
+    if kind == "bradford":
+        if not context.has_role("hr"):
+            return _failure("permission_denied", "گزارش Bradford فقط برای HR دارای دامنه مجاز است", 403)
+        return _bradford_report(request, context)
     if not (context.has_role("hr") or context.has_role("exec")):
         return _failure("permission_denied", "مشاهده گزارش‌ها مجاز نیست", 403)
-    if kind not in {"absences", "balances", "trends", "process-health", "bradford"}:
+    if kind not in {"absences", "balances", "trends", "process-health"}:
         return _failure("unknown_report", "نوع گزارش شناخته‌شده نیست", 404)
     if context.has_role("hr"):
         rows = scoped_hr_leave_requests(context)

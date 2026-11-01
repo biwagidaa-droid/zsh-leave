@@ -510,7 +510,12 @@ class FrontendApiTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["series"], [])
-        self.assertNotIn("حداقل گروه", bradford.json().get("note", ""))
+        self.assertEqual(bradford.status_code, 409)
+        self.assertEqual(bradford.json()["status"], "configuration_error")
+        self.assertEqual(
+            bradford.json()["emptyStateReason"],
+            "bradford_policy_not_configured",
+        )
         self.assertEqual(LeaveRequest.objects.filter(employee__in=(self.employee, former)).count(), 2)
 
     def test_confidential_balances_require_hr_scope(self):

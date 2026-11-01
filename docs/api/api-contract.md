@@ -142,7 +142,7 @@ These endpoints back the remaining frontend pages. They require an authenticated
 | POST/PATCH | `/api/v1/companies/`, `/api/v1/companies/{id}/`, `/api/v1/departments/`, `/api/v1/departments/{id}/` | Global-admin create/update; before/after allowlisted snapshots and AuditEvent commit atomically. |
 | GET/POST | `/api/v1/employees/{id}/contract-periods/` | Read/add validated employee work-contract periods; HR must have scope for the employee. |
 | GET | `/api/v1/coverage/?from={date}&to={date}` | Aggregate approved absences per department/day for the caller's HR or manager scope; maximum 93 days. |
-| GET | `/api/v1/reports/{kind}` | Return aggregate series for `absences`, `balances`, `trends`, or `process-health`; small groups are suppressed using `privacy.min_group_size`. The `bradford` option returns a note directing users to the scoped Bradford page. |
+| GET | `/api/v1/reports/{kind}` | Return aggregate series for `absences`, `balances`, `trends`, or `process-health`; small groups are suppressed using `privacy.min_group_size`. `bradford` returns provisional employee-level scores only to scoped HR, with explicit policy configuration, period, pagination, warnings, and empty-state metadata; details are documented in [Bradford policy](../bradford-policy-fa.md). |
 | GET/POST | `/api/v1/admin/settings/` | Read/validate/audit schema-defined settings; system-admin only. |
 | GET | `/api/v1/admin/jobs/` | Returns an empty list until persistent job-run records are implemented; system-admin only. |
 | GET | `/api/v1/audit/events/` | Return recent complete rows for global admins or redacted employee-related event summaries within current HR scope; other actors are denied. |

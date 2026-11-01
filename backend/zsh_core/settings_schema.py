@@ -112,7 +112,7 @@ _DEFS = [
                "همکاران نوع مرخصی را در تقویم ببینند (پیش‌فرض: فقط «غایب»)", "privacy"),
     SettingDef("privacy.min_group_size", 5, lambda v: _int_range(v, 2, 100),
                "حداقل اندازه گروه در گزارش تجمیعی (پیش‌فرض ۵؛ نیازمند تأیید سازمان)", "privacy"),
-    SettingDef("bradford.enabled", True, _bool, "فعال بودن تحلیل Bradford", "bradford"),
+    SettingDef("bradford.enabled", False, _bool, "فعال بودن تحلیل Bradford پس از تصویب سیاست", "bradford"),
     SettingDef("bradford.include_types", "sick", _nonempty_text,
                "کلید انواع مرخصی مشمول (جداشده با کاما)", "bradford"),
     SettingDef("bradford.include_hourly", False, _bool, "شمارش مرخصی ساعتی", "bradford"),
