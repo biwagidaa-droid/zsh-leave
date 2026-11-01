@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { api } from "../api";
+import { api, DEMO_MODE } from "../api";
 import { asApiError, errorMessage } from "../api/errors";
 import type { LeaveRequest } from "../api/types";
 import { JalaliDateField } from "../components/JalaliDateField";
@@ -98,10 +98,10 @@ export function RequestNewPage() {
   const nav = useNavigate();
   const formRef = useRef<HTMLFormElement>(null);
   const { data: types, error: typesError, loading: typesLoading } = useAsync(() => api.listTypes(), []);
-  const { data: employees } = useAsync(() => api.employees().catch(() => []), []);
-  const { data: policy } = useAsync(() => api.clientPolicy().catch(() => DEFAULT_CLIENT_POLICY), []);
-  const { data: holidayRows } = useAsync(() => api.holidays().catch(() => []), []);
-  const { data: mine } = useAsync(() => api.listRequests({ mine: true }).catch(() => null), []);
+  const { data: employees, error: employeesError, reload: reloadEmployees } = useAsync(() => api.employees(), []);
+  const { data: policy, error: policyError, reload: reloadPolicy } = useAsync(() => api.clientPolicy(), []);
+  const { data: holidayRows, error: holidaysError, reload: reloadHolidays } = useAsync(() => api.holidays(), []);
+  const { data: mine, error: mineError, reload: reloadMine } = useAsync(() => api.listRequests({ mine: true }), []);
   const requestable = (types ?? []).filter((t) => t.employeeRequestable && t.enabled);
   const [kind, setKind] = useState<DurationKind>("daily");
   const [startTime, setStartTime] = useState("10:00");
@@ -254,6 +254,10 @@ export function RequestNewPage() {
     <>
       <PageHeader title="ثبت درخواست مرخصی" subtitle="مقدار روز کاری یک تخمین است تا زمانی که شما تأیید کنید" />
       {typesError && <ErrorState message={typesError} />}
+      {employeesError && <ErrorState message={employeesError} onRetry={() => void reloadEmployees()} />}
+      {policyError && <ErrorState message={policyError} onRetry={() => void reloadPolicy()} />}
+      {holidaysError && <ErrorState message={holidaysError} onRetry={() => void reloadHolidays()} />}
+      {mineError && <ErrorState message={mineError} onRetry={() => void reloadMine()} />}
       {formError && <Banner tone="danger">{formError}</Banner>}
       <Card>
         {typesLoading && !types ? <LoadingBlock /> : (
@@ -588,7 +592,11 @@ export function RequestDetailPage() {
           <ul className="list">
             {(files ?? []).map((f) => <li key={f.id}><span>{f.fileName}</span><span className="hint">{f.sizeLabel}</span></li>)}
           </ul>
-          <Button variant="secondary" size="sm" loading={fileBusy} onClick={() => void addFile()}>افزودن پیوست نمایشی</Button>
+          {DEMO_MODE ? (
+            <Button variant="secondary" size="sm" loading={fileBusy} onClick={() => void addFile()}>افزودن پیوست نمایشی</Button>
+          ) : (
+            <Banner tone="warn">بارگذاری عملیاتی پیوست تا پیاده‌سازی API امن Backend در دسترس نیست.</Banner>
+          )}
         </Card>
       )}
       {pending && (
@@ -642,7 +650,7 @@ export function HrAbsencePage() {
     let alive = true;
     api.estimate(Number(employeeId), start, end)
       .then((e) => { if (alive) setDays(Number(e.days).toFixed(1)); })
-      .catch(() => { /* دستی وارد شود */ });
+      .catch((err) => { if (alive) setFormError(`محاسبه روزهای کاری انجام نشد: ${errorMessage(err)}`); });
     return () => { alive = false; };
   }, [estimated, employeeId, start, end]);
 

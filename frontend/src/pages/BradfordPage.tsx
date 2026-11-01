@@ -40,7 +40,6 @@ type Loaded = {
   /** درخواست‌هایی که شمارش کل بیش از صفحه‌های خوانده‌شده بود؛ در این حالت امتیاز نمایش داده نمی‌شود */
   truncated: boolean;
   cfg: BradfordConfig;
-  settingsAvailable: boolean;
   holidays: Awaited<ReturnType<typeof api.holidays>>;
   workDays: Record<number, number[]>;
   notes: BradfordNote[];
@@ -50,10 +49,10 @@ type Loaded = {
 async function loadAll(): Promise<Loaded> {
   const [employees, settings, holidays, notes, types] = await Promise.all([
     api.employees(),
-    api.settings().catch(() => null),
-    api.holidays().catch(() => []),
-    api.bradfordNotes().catch(() => []),
-    api.listTypes().catch(() => []),
+    api.settings(),
+    api.holidays(),
+    api.bradfordNotes(),
+    api.listTypes(),
   ]);
   const records: LeaveRequest[] = [];
   let truncated = false;
@@ -66,15 +65,16 @@ async function loadAll(): Promise<Loaded> {
   const withAbsence = new Set(records.map((r) => r.employeeId));
   const workDays: Record<number, number[]> = {};
   await Promise.all(employees.filter((e) => withAbsence.has(e.id)).map(async (e) => {
-    try {
-      const periods = await api.contracts(e.id);
-      const now = todayIso();
-      const cur = periods.find((p) => p.start <= now && (p.end == null || p.end >= now));
-      if (cur?.workDays.length) workDays[e.id] = cur.workDays;
-    } catch { /* الگوی پیش‌فرض سازمان */ }
+    const periods = await api.contracts(e.id);
+    const now = todayIso();
+    const cur = periods.find((p) => p.start <= now && (p.end == null || p.end >= now));
+    if (!cur?.workDays.length) {
+      throw new Error("برای محاسبه Bradford، الگوی کاری معتبر کارکنان باید از سرور دریافت شود");
+    }
+    workDays[e.id] = cur.workDays;
   }));
   return {
-    employees, records, truncated, cfg: bradfordConfigFromSettings(settings), settingsAvailable: !!settings,
+    employees, records, truncated, cfg: bradfordConfigFromSettings(settings),
     holidays, workDays, notes, types: types.map((t) => ({ key: t.key, labelFa: t.labelFa })),
   };
 }
@@ -218,7 +218,6 @@ export function BradfordPage() {
         و فقط روزهای کاری گذشته محاسبه می‌شوند؛ مرخصی برنامه‌ریزی‌شده (مثل استحقاقی) غیبت غیرموجه تلقی نمی‌شود.
         {data.cfg.includeHourly ? ` مرخصی ساعتی با تبدیل ${data.cfg.hourlyMinutesPerDay} دقیقه = ۱ روز لحاظ شده است.` : " مرخصی ساعتی در محاسبه نیست (سیاست تبدیل فعال نشده)."}
       </Banner>
-      {!data.settingsAvailable && <Banner tone="warn">تنظیمات Bradford از سرور خوانده نشد؛ مقادیر پیش‌فرض استفاده شده و تغییر آستانه‌ها ممکن است مجاز نباشد.</Banner>}
       {showSettings && <BradfordSettings cfg={data.cfg} types={data.types} onSaved={() => void reload()} />}
       {!data.cfg.enabled ? (
         <Card><Empty title="تحلیل Bradford در تنظیمات غیرفعال است" hint="کلید bradford.enabled را فعال کنید." /></Card>

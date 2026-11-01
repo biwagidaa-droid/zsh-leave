@@ -20,13 +20,16 @@ export function BalancesPage() {
   const year = jalaliNow().jy;
   const canPick = hasAny(user?.roles ?? [], "hr", "manager");
   const [employeeId, setEmployeeId] = useState<number | "">("");
-  const { data: employees } = useAsync(() => (canPick ? api.employees().catch(() => []) : Promise.resolve([])), [canPick]);
+  const { data: employees, error: employeesError, reload: reloadEmployees } = useAsync(
+    () => (canPick ? api.employees() : Promise.resolve([])), [canPick],
+  );
   const { data, error, loading, reload } = useAsync(
     () => api.balances(year, employeeId === "" ? undefined : Number(employeeId)), [year, employeeId],
   );
   return (
     <>
       <PageHeader title="مانده سهمیه" subtitle={`سال ${year} · فرمول: کل − استفاده‌شده ؛ قابل استفاده پس از کسر در انتظار`} />
+      {employeesError && <ErrorState message={employeesError} onRetry={() => void reloadEmployees()} />}
       {canPick && (
         <div className="toolbar">
           <label htmlFor="bal-emp" className="muted">کارمند:</label>
@@ -150,7 +153,7 @@ const SAMPLE_CSV = "personnel_code,type,year,days\n1001,annual,1405,30\n9999,ann
 export function ImportPage() {
   const toast = useToast();
   const fileRef = useRef<HTMLInputElement>(null);
-  const [csv, setCsv] = useState(SAMPLE_CSV);
+  const [csv, setCsv] = useState(DEMO_MODE ? SAMPLE_CSV : "");
   const [preview, setPreview] = useState<ImportPreview | null>(null);
   const [busy, setBusy] = useState<"dry" | "save" | null>(null);
   const [error, setError] = useState("");

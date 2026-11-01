@@ -122,7 +122,7 @@ const STATUS_TONE: Record<string, "ok" | "danger" | "warn" | "muted"> = { ok: "o
 
 export function JobsPage() {
   const { data: jobs, error, loading, reload } = useAsync(() => api.jobs(), []);
-  const { data: health } = useAsync(() => api.health().catch(() => null), []);
+  const { data: health, error: healthError, reload: reloadHealth } = useAsync(() => api.health(), []);
   const columns: Column<JobRow>[] = [
     { key: "job", label: "Job" },
     { key: "started", label: "شروع", render: (j) => formatJalaliDateTime(j.started) },
@@ -134,6 +134,7 @@ export function JobsPage() {
     <>
       <PageHeader title="Jobها و سلامت" subtitle="یادآوری و ارجاع تا تعیین مهلت (OQ-04) غیرفعال می‌مانند" />
       {error && <ErrorState message={error} onRetry={() => void reload()} />}
+      {healthError && <ErrorState message={healthError} onRetry={() => void reloadHealth()} />}
       <div className="grid grid-3 mb">
         <Card title="Live"><Badge tone={health?.live ? "ok" : "danger"}>{health?.live ? "فعال" : "خیر"}</Badge></Card>
         <Card title="Ready"><Badge tone={health?.ready ? "ok" : "danger"}>{health?.ready ? "آماده" : "خیر"}</Badge></Card>

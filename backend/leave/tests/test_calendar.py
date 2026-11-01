@@ -2,6 +2,7 @@ import datetime as dt
 from decimal import Decimal
 
 from django.contrib.auth import get_user_model
+from django.contrib.auth.models import Group
 from django.core.exceptions import ValidationError
 from django.test import TestCase
 from rest_framework.test import APIClient
@@ -245,13 +246,55 @@ class CalendarApiTests(TestCase):
         self.assertEqual(response.data[0]["label"], "غیبت")
         self.assertNotIn("reason", response.data[0])
 
-    def test_org_calendar_is_superuser_only(self):
+    def test_org_calendar_requires_company_scoped_hr_role(self):
         self.client.force_authenticate(user=self.manager_user)
         response = self.client.get(
             "/api/v1/calendar/events/",
             {"from": "2026-11-01", "to": "2026-11-30", "scope": "org"},
         )
         self.assertEqual(response.status_code, 403)
+
+        admin = get_user_model().objects.create_superuser(
+            username="root", email="root@example.test", password="test-password",
+        )
+        self.client.force_authenticate(user=admin)
+        response = self.client.get(
+            "/api/v1/calendar/events/",
+            {"from": "2026-11-01", "to": "2026-11-30", "scope": "org"},
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_hr_org_calendar_is_limited_to_hr_employee_company(self):
+        hr_group = Group.objects.create(name="HR")
+        self.other_user.groups.add(hr_group)
+        company_b_user = get_user_model().objects.create_user(
+            username="company-b-worker", password="test-password",
+        )
+        company_b_employee = EmployeeProfile.objects.create(
+            user=company_b_user, company=self.company_b, personnel_code="201",
+            start_date=dt.date(2020, 1, 1),
+        )
+        leave_type = LeaveType.objects.create(
+            key="annual", label_fa="استحقاقی", employee_requestable=True,
+        )
+        for employee in (self.report, company_b_employee):
+            LeaveRequest.objects.create(
+                employee=employee, leave_type=leave_type,
+                start_date=dt.date(2026, 11, 2), end_date=dt.date(2026, 11, 2),
+                working_days=Decimal("1"), status="APPROVED",
+            )
+
+        self.client.force_authenticate(user=self.other_user)
+        response = self.client.get(
+            "/api/v1/calendar/events/",
+            {"from": "2026-11-01", "to": "2026-11-30", "scope": "org"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            {event["employeeId"] for event in response.data},
+            {self.report.pk},
+        )
 
     def test_holiday_list_is_scoped_to_employee_company(self):
         PublicHoliday.objects.create(

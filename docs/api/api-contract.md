@@ -60,7 +60,7 @@ All data-bearing endpoints require the configured authenticated session. Managem
 
 | Method | Endpoint | Contract |
 |---|---|---|
-| GET | `/api/v1/calendar/events/?from=YYYY-MM-DD&to=YYYY-MM-DD&scope=me\|team\|org` | Calendar events; team is limited to direct reports in the same company; organization scope is superuser-only. |
+| GET | `/api/v1/calendar/events/?from=YYYY-MM-DD&to=YYYY-MM-DD&scope=me\|team\|org` | Calendar events; team is limited to direct reports in the same company; `org` requires Django group `HR` and an employee profile and is limited to that profile's company. Cross-company HR scope is not implemented. |
 | GET | `/api/v1/calendar/holidays/?from=YYYY-MM-DD&to=YYYY-MM-DD` | Active range holidays applicable to the authenticated employee's national, organization, company, and site scopes. |
 | GET | `/api/v1/working-days/estimate?employee={id}&start=YYYY-MM-DD&end=YYYY-MM-DD` | Backend day-count estimate; an employee can query only their own profile unless superuser. |
 | GET/POST | `/api/v1/calendar/work-patterns/` | Read effective patterns for own profile; create a validated pattern as superuser. |

@@ -56,3 +56,18 @@ Status legend: Not Started, In Progress, Blocked, Completed, Needs Review.
 - Goal: Deliver secure HR operations, employee records, imports, attachments, and analytics.
 - Status: Blocked
 - Dependencies: Phase 06/07 acceptance, operational Phase 03 permissions and organization scope, Phase 04/05 APIs, and approved HR, data-retention, and sensitive-document policies.
+
+## Phase 09 – Management Dashboards and Reports
+- Goal: Deliver real, permission-scoped operational dashboards and reports.
+- Status: Blocked (initial audit: operational identity, leave ledger, organization scope, and reporting APIs are missing).
+- Evidence: `docs/reports/phase-09-report.md`.
+
+## Phase 10 – Frontend and User Experience
+- Goal: Connect operational pages to real APIs and complete accessible, responsive workflows.
+- Status: Partial (Demo is development-only and selected error fallbacks were removed; full API integration and E2E remain blocked).
+- Evidence: `docs/reports/phase-10-report.md`.
+
+## Phase 11 – Security, Verification, and Operations
+- Goal: Verify authorization, data integrity, recovery, observability, and deployment readiness.
+- Status: Partial / Not Ready (one calendar access-control defect fixed; full API, PostgreSQL, backup/restore, and deployment verification remain outstanding).
+- Evidence: `docs/reports/phase-11-report.md` and `docs/reports/release-readiness-report.md`.

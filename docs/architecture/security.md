@@ -4,12 +4,12 @@
 This document captures the current backend posture and distinguishes the approved baseline from future implementation tasks.
 
 ## 2. Security Areas
-- Authentication: Not yet operational; Phase 03 requirement.
-- Authorization: Modeled but not enforced in code; Phase 03 requirement.
+- Authentication: Not yet operational as a complete application login/session lifecycle; Phase 03 requirement.
+- Authorization: Endpoint-specific checks exist for the calendar foundation. The organization calendar currently requires Django group `HR` plus an employee profile and is restricted to that profile's company. This is not a complete RBAC or organization-scope implementation; Phase 03 remains required.
 - CSRF: Enabled in Django settings; requires cookie and host policy review in production.
 - CORS: Not yet configured explicitly; require approved frontend origin list in production.
 - Rate Limiting: DRF throttle is configured at the framework level as a baseline.
-- Secret Management: Environment variables only; no secrets committed to repo.
+- Secret Management: Runtime secrets are expected from environment variables. A heuristic source scan was performed, but dedicated secret scanning and Git-history review are still unverified.
 - Session Security: HttpOnly and SameSite are configured; secure cookies in non-debug mode.
 - Password Security: Argon2 is preferred via `AUTH_PASSWORD_HASHERS`.
 - Audit Logging: Request and audit event models exist for append-only traceability.

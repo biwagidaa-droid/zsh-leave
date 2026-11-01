@@ -2,7 +2,6 @@ import { Link } from "react-router-dom";
 import { api } from "../api";
 import { DonutChart } from "../components/charts";
 import { Card, ErrorState, LoadingBlock, PageHeader, Stat, StatusBadge } from "../components/ui";
-import { DEFAULT_CLIENT_POLICY } from "../lib/clientPolicy";
 import { DeadlineLabel } from "../components/Deadline";
 import { deadlineInfo } from "../lib/deadline";
 import { fromGregorian, isoToG, jalaliNow, todayIso } from "../lib/jalali";
@@ -32,16 +31,18 @@ export function DashboardPage() {
   const { data: requests, error: reqError, loading: reqLoading, reload: reloadReq } = useAsync(
     () => (isRequester ? api.listRequests({}) : Promise.resolve(null)), [isRequester],
   );
-  const { data: balances, loading: balLoading } = useAsync(
-    () => (isRequester ? api.balances(year).catch(() => []) : Promise.resolve([])), [year, isRequester],
+  const { data: balances, error: balanceError, loading: balLoading, reload: reloadBalances } = useAsync(
+    () => (isRequester ? api.balances(year) : Promise.resolve([])), [year, isRequester],
   );
   const isHr = hasAny(roles, "hr");
-  const { data: policy } = useAsync(
-    () => (isHr ? api.clientPolicy().catch(() => DEFAULT_CLIENT_POLICY) : Promise.resolve(null)), [isHr],
+  const { data: policy, error: policyError, reload: reloadPolicy } = useAsync(
+    () => (isHr ? api.clientPolicy() : Promise.resolve(null)), [isHr],
   );
-  const { data: notes, loading: noteLoading } = useAsync(() => api.notifications().catch(() => []), []);
-  const { data: health, loading: healthLoading } = useAsync(
-    () => (isAdmin ? api.health().catch(() => null) : Promise.resolve(null)), [isAdmin],
+  const { data: notes, error: notesError, loading: noteLoading, reload: reloadNotes } = useAsync(
+    () => api.notifications(), [],
+  );
+  const { data: health, error: healthError, loading: healthLoading, reload: reloadHealth } = useAsync(
+    () => (isAdmin ? api.health() : Promise.resolve(null)), [isAdmin],
   );
   if (!user) return null;
 
@@ -50,7 +51,7 @@ export function DashboardPage() {
   const mine = all.filter((r) => r.employeeId === user.employeeId);
   // صف تأیید: فقط درخواست‌های باز که کاربر اجازه‌ی تصمیم‌گیری دارد (canDecide=false صریحاً حذف می‌شود)
   const pendingTeam = all.filter((r) => isOpenStatus(r.status) && r.canDecide !== false);
-  const unread = notes?.filter((n) => !n.read).length ?? 0;
+  const unread = notes?.filter((n) => !n.read).length;
   const nearExpiry = all.filter((r) => { const d = deadlineInfo(r, todayIso()); return d?.kind === "waiting" && d.tone === "warn"; }).length;
   const statusData = STATUS_ORDER.map((st) => ({ label: STATUS_LABEL[st], value: all.filter((r) => r.status === st).length }));
   const annual = balances?.find((b) => b.leaveTypeKey === "annual");
@@ -64,11 +65,15 @@ export function DashboardPage() {
         actions={isRequester ? <Link to="/requests/new" className="btn sm">ثبت درخواست</Link> : undefined}
       />
       {reqError && <ErrorState message={reqError} onRetry={() => void reloadReq()} />}
+      {balanceError && <ErrorState message={balanceError} onRetry={() => void reloadBalances()} />}
+      {notesError && <ErrorState message={notesError} onRetry={() => void reloadNotes()} />}
+      {policyError && <ErrorState message={policyError} onRetry={() => void reloadPolicy()} />}
+      {healthError && <ErrorState message={healthError} onRetry={() => void reloadHealth()} />}
       {role === "admin" && (
         <div className="grid grid-3 mb">
           <Stat label="سلامت" value={health?.ready ? "آماده" : "نامشخص"} hint={health?.db} loading={healthLoading} />
           <Stat label="آخرین Job" value={health?.lastJob ?? "—"} loading={healthLoading} />
-          <Stat label="اعلان‌های نخوانده" value={String(unread)} loading={noteLoading} />
+          <Stat label="اعلان‌های نخوانده" value={notes ? String(unread ?? 0) : "—"} loading={noteLoading} />
         </div>
       )}
       {role === "exec" && (
@@ -82,7 +87,7 @@ export function DashboardPage() {
           <Stat label="مانده استحقاقی" value={annual?.remaining ?? "—"} hint={`قابل استفاده ${annual?.usable ?? "—"}`} loading={balLoading} />
           <Stat label="در انتظار" value={String(mine.filter((r) => isOpenStatus(r.status)).length)} loading={reqLoading} />
           <Stat label="تأییدشده امسال" value={String(approvedThisYear)} loading={reqLoading} />
-          <Stat label="اعلان نخوانده" value={String(unread)} loading={noteLoading} />
+          <Stat label="اعلان نخوانده" value={notes ? String(unread ?? 0) : "—"} loading={noteLoading} />
         </div>
       )}
       {isHr && (
@@ -91,7 +96,7 @@ export function DashboardPage() {
             {reqLoading && !requests ? <LoadingBlock /> : (
               <>
                 <div className="grid grid-4 mb">
-                  <Stat label="لغو خودکار (مهلت تأیید)" value={policy?.autoCancelEnabled ? `${policy.autoCancelDays} روز` : "غیرفعال"} hint="سیاست فعلی" />
+                  <Stat label="لغو خودکار (مهلت تأیید)" value={policy ? (policy.autoCancelEnabled ? `${policy.autoCancelDays} روز` : "غیرفعال") : "نامشخص"} hint="سیاست فعلی" />
                   <Stat label="لغوشده خودکار" value={String(all.filter((r) => r.status === AUTO_CANCELLED).length)} hint="در درخواست‌های بارگذاری‌شده" />
                   <Stat label="نزدیک به انقضا" value={String(nearExpiry)} hint="حداکثر یک روز تا پایان مهلت" />
                   <Stat label="مرخصی ساعتی" value={String(all.filter((r) => r.durationKind === "hourly").length)} hint="در درخواست‌های بارگذاری‌شده" />

@@ -1,4 +1,3 @@
-import { DEFAULT_CLIENT_POLICY } from "../lib/clientPolicy";
 import { ApiError, UNAUTHORIZED_EVENT } from "./errors";
 import type { Api, LeaveDraft, RequestFilters } from "./contract";
 import type { ApiErrorBody } from "./types";
@@ -125,21 +124,7 @@ export const httpApi: Api = {
   audit: () => req("/audit/events/"),
   health: () => req("/health/ready"),
   estimate: (employeeId, start, end) => req(`/working-days/estimate?employee=${employeeId ?? ""}&start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`),
-  async clientPolicy() {
-    try {
-      return await req("/policy/client");
-    } catch (e) {
-      if (e instanceof ApiError && (e.status === 404 || e.status === 501)) return DEFAULT_CLIENT_POLICY;
-      throw e;
-    }
-  },
-  async bradfordNotes() {
-    try {
-      return await req("/hr/bradford-notes/");
-    } catch (e) {
-      if (e instanceof ApiError && (e.status === 404 || e.status === 501)) return [];
-      throw e;
-    }
-  },
+  clientPolicy: () => req("/policy/client"),
+  bradfordNotes: () => req("/hr/bradford-notes/"),
   saveBradfordNote: (employeeId, body) => req("/hr/bradford-notes/", { method: "POST", body: JSON.stringify({ employeeId, body }) }),
 };

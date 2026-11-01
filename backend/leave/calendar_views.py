@@ -141,9 +141,12 @@ def calendar_events(request):
     scope = request.query_params.get("scope", "me")
     employee = _employee_for(request.user)
     if scope == "org":
-        if not _is_admin(request.user):
+        if not employee or not request.user.groups.filter(name="HR").exists():
             return _failure("permission_denied", "دسترسی تقویم سازمانی مجاز نیست", 403)
-        requests = LeaveRequest.objects.filter(status="APPROVED")
+        requests = LeaveRequest.objects.filter(
+            employee__company_id=employee.company_id,
+            status="APPROVED",
+        )
     elif scope == "team":
         if not employee:
             return _failure("employee_profile_required", "پرونده کارمندی برای کاربر ثبت نشده است", 403)
