@@ -26,8 +26,15 @@ export const DEFAULT_CLIENT_POLICY: ClientPolicy = {
 
 function asBool(v: unknown, fallback: boolean): boolean {
   if (typeof v === "boolean") return v;
-  if (v === "true") return true;
-  if (v === "false") return false;
+  if (typeof v === "number") {
+    if (v === 1) return true;
+    if (v === 0) return false;
+  }
+  if (typeof v === "string") {
+    const t = v.trim().toLowerCase();
+    if (["1", "true", "yes", "y", "on"].includes(t)) return true;
+    if (["0", "false", "no", "n", "off"].includes(t)) return false;
+  }
   return fallback;
 }
 

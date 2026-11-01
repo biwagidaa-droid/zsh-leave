@@ -69,17 +69,43 @@ export function defaultNotificationPrefs(): NotificationPrefs {
   return { master: "on_sound", volume: 0.45, soundId: "chime", desktop: false, kinds };
 }
 
+function parseBooleanLike(value: unknown, fallback: boolean): boolean {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number") return value === 1 ? true : value === 0 ? false : fallback;
+  if (typeof value === "string") {
+    const t = value.trim().toLowerCase();
+    if (["1", "true", "yes", "y", "on"].includes(t)) return true;
+    if (["0", "false", "no", "n", "off"].includes(t)) return false;
+  }
+  return fallback;
+}
+
+function parseFiniteFloat(value: unknown, fallback: number): number {
+  if (typeof value === "number" && Number.isFinite(value)) return (value >= 0 && value <= 1) ? value : fallback;
+  if (typeof value === "string") {
+    const n = Number(value);
+    if (Number.isFinite(n) && n >= 0 && n <= 1) return n;
+  }
+  return fallback;
+}
+
 export function parseNotificationPrefs(raw: unknown): NotificationPrefs {
   const base = defaultNotificationPrefs();
   if (!raw || typeof raw !== "object") return base;
   const o = raw as Partial<NotificationPrefs> & { kinds?: Partial<Record<NotifKind, boolean>> };
-  if (o.master === "on_sound" || o.master === "on_silent" || o.master === "off") base.master = o.master;
-  if (typeof o.volume === "number" && o.volume >= 0 && o.volume <= 1) base.volume = o.volume;
+  const master = typeof o.master === "string" ? o.master.toLowerCase() : "";
+  if (master === "on_sound" || master === "on_silent" || master === "off" || master === "on" || master === "silent") {
+    if (master === "on") base.master = "on_sound";
+    else if (master === "silent") base.master = "on_silent";
+    else base.master = o.master as NotifMaster;
+  }
+  if (typeof o.volume === "number" || typeof o.volume === "string") base.volume = parseFiniteFloat(o.volume, base.volume);
   if (o.soundId === "chime" || o.soundId === "soft" || o.soundId === "alert") base.soundId = o.soundId;
-  if (typeof o.desktop === "boolean") base.desktop = o.desktop;
+  base.desktop = parseBooleanLike(o.desktop, base.desktop);
   if (o.kinds && typeof o.kinds === "object") {
     for (const k of ALL_KINDS) {
       if (typeof o.kinds[k] === "boolean") base.kinds[k] = o.kinds[k]!;
+      else if (typeof o.kinds[k] === "string") base.kinds[k] = parseBooleanLike(o.kinds[k], base.kinds[k]);
     }
   }
   return base;
