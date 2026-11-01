@@ -9,11 +9,16 @@ from django.test import TestCase, override_settings
 from django.urls import resolve
 from rest_framework.test import APIClient
 
+from leave.authorization import authorization_context
 from leave.entitlement_services import create_entitlement
 from leave.models import (
+    AuditEvent,
+    BradfordNote,
     Company,
     Department,
+    EntitlementEvent,
     EmployeeProfile,
+    LeaveEntitlement,
     LeaveRequest,
     LeaveRequestEvent,
     LeaveType,
@@ -345,6 +350,220 @@ class FrontendApiTests(TestCase):
         self.assertEqual(saved.status_code, 200, saved.content)
         self.assertEqual(self.client.get("/api/v1/hr/bradford-notes/").json()[0]["body"],
                          "Reviewed with employee")
+
+    def test_company_scope_rejects_foreign_hr_targets_without_side_effects(self):
+        other_company = Company.objects.create(code="SCOPE-B", name="Scope company B")
+        other_user = get_user_model().objects.create_user(username="scope-company-b")
+        other_employee = EmployeeProfile.objects.create(
+            user=other_user, company=other_company, personnel_code="SCOPE-B-1",
+            start_date=dt.date(2020, 1, 1),
+        )
+        entitlement = create_entitlement(
+            employee=other_employee, leave_type=self.leave_type, year=1405,
+            base_days=Decimal("12"), actor=self.hr_user, reason="opening",
+            idempotency_key="scope-company-opening",
+        )
+        BradfordNote.objects.create(
+            employee=other_employee, body="Private company B note", updated_by=self.hr_user,
+        )
+        event_count = EntitlementEvent.objects.count()
+        audit_count = AuditEvent.objects.count()
+
+        adjustment = self.client.post(
+            f"/api/v1/entitlements/{entitlement.pk}/adjust",
+            {"days": "2", "reason": "out of scope"}, format="json",
+        )
+        self.assertEqual(adjustment.status_code, 404)
+        entitlement.refresh_from_db()
+        self.assertEqual(entitlement.manual_adjustment, Decimal("0.0"))
+        self.assertEqual(EntitlementEvent.objects.count(), event_count)
+        self.assertEqual(AuditEvent.objects.count(), audit_count)
+
+        valid_csv = "personnel_code,type,year,days\nE-1,annual,1406,5\n"
+        preview = self.client.post(
+            "/api/v1/entitlements/import/?dry_run=1", {"csv": valid_csv}, format="json",
+        )
+        self.assertEqual(preview.json()["accepted"], 1)
+        crafted_csv = "personnel_code,type,year,days\nSCOPE-B-1,annual,1405,8\n"
+        commit = self.client.post(
+            "/api/v1/entitlements/import/", {"csv": crafted_csv}, format="json",
+        )
+        self.assertEqual(commit.status_code, 200)
+        self.assertEqual((commit.json()["accepted"], commit.json()["rejected"]), (0, 1))
+        self.assertFalse(LeaveEntitlement.objects.filter(
+            employee=other_employee, leave_type=self.leave_type, year=1406,
+        ).exists())
+        self.assertEqual(EntitlementEvent.objects.count(), event_count)
+        self.assertEqual(AuditEvent.objects.count(), audit_count)
+
+        notes = self.client.get("/api/v1/hr/bradford-notes/")
+        self.assertEqual(notes.status_code, 200)
+        self.assertEqual(notes.json(), [])
+        write_note = self.client.post(
+            "/api/v1/hr/bradford-notes/",
+            {"employeeId": other_employee.pk, "body": "ID substitution"}, format="json",
+        )
+        self.assertEqual(write_note.status_code, 404)
+        self.assertEqual(BradfordNote.objects.get(employee=other_employee).body,
+                         "Private company B note")
+
+    def test_department_scope_excludes_self_and_manager_union_for_hr_operations(self):
+        department_a = Department.objects.create(
+            company=self.company, code="SCOPE-A", name="Scope department A",
+        )
+        department_b = Department.objects.create(
+            company=self.company, code="SCOPE-B", name="Scope department B",
+        )
+        self.hr.department = department_b
+        self.hr.save(update_fields=["department"])
+        assignment = RoleAssignment.objects.get(user=self.hr_user, role=RoleAssignment.ROLE_HR)
+        assignment.scope = RoleAssignment.SCOPE_DEPARTMENT
+        assignment.department = department_a
+        assignment.save()
+        in_scope_user = get_user_model().objects.create_user(username="scope-dept-a")
+        in_scope_employee = EmployeeProfile.objects.create(
+            user=in_scope_user, company=self.company, department=department_a,
+            personnel_code="SCOPE-A-1", start_date=dt.date(2020, 1, 1),
+        )
+        report_user = get_user_model().objects.create_user(username="scope-direct-report")
+        report = EmployeeProfile.objects.create(
+            user=report_user, company=self.company, department=department_b,
+            manager=self.hr, personnel_code="SCOPE-B-2", start_date=dt.date(2020, 1, 1),
+        )
+        self.assertEqual(self.client.get("/api/v1/employees/").status_code, 200)
+        self.assertEqual(
+            {row["id"] for row in self.client.get("/api/v1/employees/").json()},
+            {self.hr.pk, in_scope_employee.pk, report.pk},
+        )
+        self.assertEqual(
+            authorization_context(self.hr_user).has_role("manager"), True,
+        )
+        self.assertEqual(
+            authorization_context(self.hr_user).has_role("hr"), True,
+        )
+        self.assertEqual(
+            authorization_context(self.hr_user).employee_id, self.hr.pk,
+        )
+
+        self_entitlement = create_entitlement(
+            employee=self.hr, leave_type=self.leave_type, year=1405,
+            base_days=Decimal("10"), actor=self.hr_user, reason="opening",
+            idempotency_key="scope-self-opening",
+        )
+        report_entitlement = create_entitlement(
+            employee=report, leave_type=self.leave_type, year=1405,
+            base_days=Decimal("10"), actor=self.hr_user, reason="opening",
+            idempotency_key="scope-report-opening",
+        )
+        BradfordNote.objects.create(employee=self.hr, body="self", updated_by=self.hr_user)
+        BradfordNote.objects.create(employee=report, body="report", updated_by=self.hr_user)
+        event_count = EntitlementEvent.objects.count()
+        audit_count = AuditEvent.objects.count()
+        note_count = BradfordNote.objects.count()
+
+        for entitlement in (self_entitlement, report_entitlement):
+            with self.subTest(employee=entitlement.employee_id):
+                response = self.client.post(
+                    f"/api/v1/entitlements/{entitlement.pk}/adjust",
+                    {"days": "1", "reason": "outside department"}, format="json",
+                )
+                self.assertEqual(response.status_code, 404)
+        preview = self.client.post(
+            "/api/v1/entitlements/import/?dry_run=1",
+            {"csv": "personnel_code,type,year,days\nSCOPE-B-2,annual,1406,5\n"},
+            format="json",
+        )
+        self.assertEqual((preview.json()["accepted"], preview.json()["rejected"]), (0, 1))
+        commit = self.client.post(
+            "/api/v1/entitlements/import/",
+            {"csv": "personnel_code,type,year,days\nSCOPE-B-2,annual,1406,5\n"},
+            format="json",
+        )
+        self.assertEqual((commit.json()["accepted"], commit.json()["rejected"]), (0, 1))
+        self.assertEqual(self.client.get("/api/v1/hr/bradford-notes/").json(), [])
+        for employee in (self.hr, report):
+            write = self.client.post(
+                "/api/v1/hr/bradford-notes/",
+                {"employeeId": employee.pk, "body": "outside department"}, format="json",
+            )
+            self.assertEqual(write.status_code, 404)
+        self.assertEqual(
+            self.client.get(f"/api/v1/employees/{report.pk}/contract-periods/").status_code,
+            404,
+        )
+        self.assertEqual(
+            self.client.get("/api/v1/coverage/?from=2026-11-02&to=2026-11-02").json(),
+            [{"date": "2026-11-02", "departmentName": department_a.name,
+              "awayCount": 0, "headcount": 1}],
+        )
+        self.assertEqual(EntitlementEvent.objects.count(), event_count)
+        self.assertEqual(AuditEvent.objects.count(), audit_count)
+        self.assertEqual(BradfordNote.objects.count(), note_count)
+        self_entitlement.refresh_from_db()
+        report_entitlement.refresh_from_db()
+        self.assertEqual(self_entitlement.manual_adjustment, Decimal("0.0"))
+        self.assertEqual(report_entitlement.manual_adjustment, Decimal("0.0"))
+        self.assertFalse(LeaveEntitlement.objects.filter(
+            employee=report, leave_type=self.leave_type, year=1406,
+        ).exists())
+
+    def test_hr_scope_and_explicit_admin_global_access_remain_authorized(self):
+        in_scope_entitlement = create_entitlement(
+            employee=self.employee, leave_type=self.leave_type, year=1405,
+            base_days=Decimal("10"), actor=self.hr_user, reason="opening",
+            idempotency_key="scope-allowed-opening",
+        )
+        adjustment = self.client.post(
+            f"/api/v1/entitlements/{in_scope_entitlement.pk}/adjust",
+            {"days": "2", "reason": "in scope"}, format="json",
+        )
+        self.assertEqual(adjustment.status_code, 200, adjustment.content)
+        allowed_import = self.client.post(
+            "/api/v1/entitlements/import/",
+            {"csv": "personnel_code,type,year,days\nE-1,annual,1406,5\n"},
+            format="json",
+        )
+        self.assertEqual(allowed_import.json()["accepted"], 1)
+        allowed_note = self.client.post(
+            "/api/v1/hr/bradford-notes/",
+            {"employeeId": self.employee.pk, "body": "in scope"}, format="json",
+        )
+        self.assertEqual(allowed_note.status_code, 200)
+        self.assertEqual(self.client.get("/api/v1/hr/bradford-notes/").json()[0]["body"],
+                         "in scope")
+
+        other_company = Company.objects.create(code="ADMIN-GLOBAL", name="Admin global")
+        other_user = get_user_model().objects.create_user(username="admin-global-target")
+        other_employee = EmployeeProfile.objects.create(
+            user=other_user, company=other_company, personnel_code="ADMIN-GLOBAL-1",
+            start_date=dt.date(2020, 1, 1),
+        )
+        other_entitlement = create_entitlement(
+            employee=other_employee, leave_type=self.leave_type, year=1405,
+            base_days=Decimal("10"), actor=self.hr_user, reason="opening",
+            idempotency_key="admin-global-opening",
+        )
+        admin = get_user_model().objects.create_superuser(
+            username="scope-global-admin", password="unused",
+        )
+        self.client.force_authenticate(admin)
+        admin_adjustment = self.client.post(
+            f"/api/v1/entitlements/{other_entitlement.pk}/adjust",
+            {"days": "1", "reason": "admin global"}, format="json",
+        )
+        self.assertEqual(admin_adjustment.status_code, 200, admin_adjustment.content)
+        admin_import = self.client.post(
+            "/api/v1/entitlements/import/",
+            {"csv": "personnel_code,type,year,days\nADMIN-GLOBAL-1,annual,1406,5\n"},
+            format="json",
+        )
+        self.assertEqual(admin_import.json()["accepted"], 1)
+        admin_note = self.client.post(
+            "/api/v1/hr/bradford-notes/",
+            {"employeeId": other_employee.pk, "body": "admin global"}, format="json",
+        )
+        self.assertEqual(admin_note.status_code, 200)
+        self.assertEqual(BradfordNote.objects.get(employee=other_employee).body, "admin global")
 
     def test_request_attachments_are_validated_and_downloaded_through_authorized_route(self):
         request = LeaveRequest.objects.create(

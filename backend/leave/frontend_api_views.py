@@ -19,7 +19,8 @@ from zsh_core import settings_schema
 from zsh_core.permissions import HR as POLICY_HR, Viewer, visible_balance_types
 from . import admin_services
 from .authorization import (
-    authorization_context, scoped_employees, scoped_hr_employees, scoped_hr_leave_requests,
+    authorization_context, hr_operation_employees, scoped_employees, scoped_hr_employees,
+    scoped_hr_leave_requests,
 )
 from .entitlement_services import (
     EntitlementLedgerError,
@@ -246,7 +247,7 @@ def entitlement_adjustment(request, entitlement_id: int):
     if not isinstance(data, dict) or set(data) != {"days", "reason"}:
         return _failure("invalid_payload", "روز و دلیل الزامی است", 400)
     item = LeaveEntitlement.objects.select_related("employee").filter(pk=entitlement_id).first()
-    if item is None or item.employee_id not in _employee_rows(context).values("pk"):
+    if item is None or not hr_operation_employees(context).filter(pk=item.employee_id).exists():
         raise Http404
     try:
         event = adjust_entitlement(
@@ -276,7 +277,10 @@ def _import_preview(csv_text: str, context) -> tuple[dict, list[tuple]]:
             }, []
         parsed = []
         rows = []
-        employees = {e.personnel_code: e for e in _employee_rows(context).select_related("user", "company")}
+        employees = {
+            e.personnel_code: e
+            for e in hr_operation_employees(context).select_related("user", "company")
+        }
         types = {t.key: t for t in LeaveType.objects.filter(enabled=True)}
         for line, raw in enumerate(reader, 2):
             code, key = (raw.get("personnel_code") or "").strip(), (raw.get("type") or "").strip()
@@ -320,9 +324,22 @@ def entitlement_import(request):
     if not dry_run and preview["rejected"] == 0:
         try:
             with transaction.atomic():
+                current_context = _context(request)
+                if not (current_context.has_role("hr") or _admin(current_context)):
+                    return _failure("permission_denied", "ورود گروهی سهمیه مجاز نیست", 403)
+                employee_ids = {employee.pk for _, employee, _, _, _ in valid}
+                current_employees = {
+                    employee.pk: employee
+                    for employee in hr_operation_employees(current_context).filter(
+                        pk__in=employee_ids,
+                    ).select_related("user", "company")
+                }
+                if set(current_employees) != employee_ids:
+                    raise EntitlementLedgerError("دامنه ورود گروهی دیگر معتبر نیست")
                 for line, employee, leave_type, year, days in valid:
                     create_entitlement(
-                        employee=employee, leave_type=leave_type, year=year, base_days=days,
+                        employee=current_employees[employee.pk], leave_type=leave_type,
+                        year=year, base_days=days,
                         actor=request.user, reason="ورود گروهی سهمیه",
                         idempotency_key=f"import:{request.user.pk}:{uuid4()}:{line}",
                     )
@@ -349,7 +366,7 @@ def employees(request, employee_id: int | None = None):
     if not isinstance(data, dict):
         return _failure("invalid_payload", "بدنه باید یک شیء JSON باشد", 400)
     try:
-        employee = rows.get(pk=employee_id) if employee_id is not None else None
+        employee = hr_operation_employees(context).get(pk=employee_id) if employee_id is not None else None
     except EmployeeProfile.DoesNotExist:
         raise Http404
     allowed = {"displayName", "personnelCode", "companyId", "departmentId", "managerId", "startDate", "endDate"}
@@ -365,7 +382,10 @@ def employees(request, employee_id: int | None = None):
         ):
             return _failure("permission_denied", "ثبت در این شرکت یا واحد مجاز نیست", 403)
         department = Department.objects.get(pk=data["departmentId"]) if data.get("departmentId") else None
-        manager = EmployeeProfile.objects.get(pk=data["managerId"]) if data.get("managerId") else None
+        manager = (
+            hr_operation_employees(context).get(pk=data["managerId"])
+            if data.get("managerId") else None
+        )
         start = dt.date.fromisoformat(data["startDate"]) if data.get("startDate") else (
             employee.start_date if employee else timezone.localdate()
         )
@@ -633,7 +653,7 @@ def coverage(request):
         return _failure("invalid_range", "بازه تاریخ معتبر و حداکثر ۹۳ روز باشد", 400)
     if context.has_role("hr"):
         eligible = scoped_hr_leave_requests(context)
-        employee_rows = _employee_rows(context)
+        employee_rows = hr_operation_employees(context)
     elif context.employee_id:
         eligible = LeaveRequest.objects.filter(manager_snapshot_id=context.employee_id)
         employee_rows = EmployeeProfile.objects.filter(manager_id=context.employee_id)
@@ -735,7 +755,7 @@ def bradford_notes(request):
     context = _context(request)
     if not (context.has_role("hr") or _admin(context)):
         return _failure("permission_denied", "دسترسی یادداشت Bradford مجاز نیست", 403)
-    employee_rows = _employee_rows(context)
+    employee_rows = hr_operation_employees(context)
     if request.method == "GET":
         notes = BradfordNote.objects.select_related("employee__user", "updated_by").filter(
             employee_id__in=employee_rows.values("pk"),
@@ -776,11 +796,11 @@ def _contract_json(item: ContractPeriod) -> dict:
 @api_view(["GET", "POST"])
 def contracts(request, employee_id: int):
     context = _context(request)
-    employee = _employee_rows(context).filter(pk=employee_id).first()
+    if not (context.has_role("hr") or _admin(context)):
+        return _failure("permission_denied", "مشاهده یا تغییر قرارداد مجاز نیست", 403)
+    employee = hr_operation_employees(context).filter(pk=employee_id).first()
     if employee is None:
         raise Http404
-    if not (_hr(context, employee) or _admin(context)):
-        return _failure("permission_denied", "مشاهده یا تغییر قرارداد مجاز نیست", 403)
     if request.method == "GET":
         rows = ContractPeriod.objects.filter(employee=employee)
         return Response([_contract_json(item) for item in rows])
@@ -896,12 +916,15 @@ def hr_absence(request):
     if not isinstance(data, dict) or set(data) - allowed:
         return _failure("invalid_payload", "اطلاعات غیبت معتبر نیست", 400)
     try:
-        employee = _employee_rows(context).get(pk=data["employeeId"])
+        employee = hr_operation_employees(context).get(pk=data["employeeId"])
         if not _submit_permission(context, employee):
             return _failure("permission_denied", "ثبت غیبت برای این کارمند مجاز نیست", 403)
         leave_type = LeaveType.objects.get(key=data["leaveTypeKey"])
         fields = _request_body({key: data[key] for key in allowed - {"employeeId"} if key in data})
-        replacement = EmployeeProfile.objects.filter(pk=fields["replacement_id"]).first()
+        replacement = (
+            hr_operation_employees(context).filter(pk=fields["replacement_id"]).first()
+            if fields["replacement_id"] is not None else None
+        )
         if fields["replacement_id"] is not None and replacement is None:
             raise ValueError("جانشین معتبر نیست")
 
