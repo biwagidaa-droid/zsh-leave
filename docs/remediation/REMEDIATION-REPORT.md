@@ -29,3 +29,19 @@
 ## سایر فازها
 
 فازهای lifecycle/offboarding، activation، RBAC سازمانی کامل، Bradford، scheduler، audit append-only، PostgreSQL، ادغام Frontend گسترده و آمادگی استقرار در این بازه پیاده‌سازی یا تأیید نشده‌اند. برای ادامه، `PROGRESS.md` را ببینید.
+
+## فاز چرخه استخدام و offboarding — راستی‌آزمایی مستقل
+
+**وضعیت: BLOCKED / NOT VERIFIED — نقص دسترسی بازتولید شد.** هیچ تغییر مؤثر چرخه استخدام در backend باقی نمانده است. diff اولیه فقط یک فیلد `session_version` و مدل تاریخچه استخدام اضافه می‌کرد، بدون migration، استفاده در authentication یا اتصال به authorization. تست‌ها با آن مدل ناقص ۲۶ خطای schema دادند؛ تغییر ناقص حذف شد.
+
+| بررسی | نتیجه | شواهد |
+|---|---|---|
+| دسترسی employee منقضی | **FAIL — bypass تأیید شد** | `end_date=2026-10-31` و کاربر فعال در 2026-11-01 هنوز نقش employee داشت |
+| اختیار manager منقضی | **FAIL — bypass تأیید شد** | manager منقضی نقش manager و `can_decide_leave_request=True` داشت |
+| employee فعال معمولی | مجاز | probe نقش employee را برای اشتغال جاری تأیید کرد |
+| کاربر غیرفعال | رد شد | `User.is_active=False` هیچ نقش authorization نگرفت |
+| عدم اثر جانبی رد درخواست | تأیید برای endpoint موجود HR | آزمون 403/404 و rollback ورودی نامعتبر، بدون request/event/audit/idempotency |
+| migration سازگار | schema فعلی بدون تغییر | `makemigrations --check --dry-run` موفق؛ هیچ migration چرخه استخدامی تولید/اعمال نشده |
+| session/token revocation | **NOT VERIFIED** | فقط Django database session یافت شد؛ refresh/API token یا service ابطال نشست وجود ندارد |
+
+قانون هدف برای پیاده‌سازی بعدی این است که روز `end_date` آخرین روز اشتغال و شامل همان روز باشد و تاریخ جاری از `timezone.localdate()` گرفته شود. این قانون هنوز در سرویس و API اجرا نشده است. رفتار تعلیق/خاتمه، درخواست‌های در انتظار، rehire و ابطال نشست باید پیش از اعلام رفع نقص پیاده‌سازی و آزموده شوند. شواهد فرمان‌ها و محدودیت‌ها در `PROGRESS.md` آمده‌اند.
