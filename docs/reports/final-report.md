@@ -28,3 +28,18 @@ The project now includes environment-aware settings, a production-ready Postgres
 - operational HR and manager mapping data
 - organization hierarchy expansion plan with effective dating
 - production environment variables and Postgres service deployment
+
+## Phase 06–08 Continuation Audit (2026-11-01)
+
+### Actual state
+- Phase 03–05 remain operationally incomplete: backend authentication/organization-scope enforcement and business APIs are absent. Existing domain functions and frontend Demo behavior do not establish production workflows.
+- Phase 06 is partial. `GET /api/v1/calendar/convert-date/` now performs stateless Jalali/Gregorian conversion with validation. Organization calendars, work patterns, versioned policies, and production UI integration remain incomplete.
+- Phase 07 is blocked: no persistent job runner, job history, notification backend, or related APIs.
+- Phase 08 is blocked: no operational HR APIs for absences, contracts, imports, attachments, employee profiles, or analytics.
+
+### Verification
+- Backend: 110 tests passed; Django system check and migration-state check passed.
+- Frontend: 32 tests passed; TypeScript check and Vite production build passed.
+- No migration or database data was changed. No commit or push was made.
+
+See [phase-06-report.md](./phase-06-report.md), [phase-07-report.md](./phase-07-report.md), and [phase-08-report.md](./phase-08-report.md) for phase criteria, test scope, and blockers. The three phases are not represented as complete or production-ready.

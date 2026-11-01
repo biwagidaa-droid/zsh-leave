@@ -39,3 +39,20 @@ Status legend: Not Started, In Progress, Blocked, Completed, Needs Review.
 - Goal: Deliver manager and HR reporting, Bradford analysis, and export features.
 - Status: Not Started
 - Dependencies: operational leave workflow and data model completion.
+
+## Phase 06 – Calendar, Holidays, and Leave Policies
+- Goal: Provide one trustworthy calendar conversion and business-day foundation for operational leave workflows.
+- Status: In Progress (date-conversion endpoint only)
+- Completed in this increment: stateless Jalali/Gregorian conversion API with input validation and boundary tests.
+- Remaining: authenticated organization-scoped calendar APIs, effective-dated work patterns, holiday management API/history, versioned leave policies, and production calendar UI integration.
+- Dependencies: Phase 03 identity, permissions, and organization scope; operational Phase 04/05 services.
+
+## Phase 07 – Jobs, Scheduler, and Notifications
+- Goal: Deliver idempotent background execution and persistent notifications.
+- Status: Blocked
+- Dependencies: operational Phase 03 permissions, Phase 04 workflow and ledger services, and approved reminder/escalation/retention policies.
+
+## Phase 08 – HR Operations and Analytics
+- Goal: Deliver secure HR operations, employee records, imports, attachments, and analytics.
+- Status: Blocked
+- Dependencies: operational Phase 03 permissions and organization scope, Phase 04/05 APIs, and approved HR, data-retention, and sensitive-document policies.

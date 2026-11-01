@@ -35,6 +35,42 @@ class BackendInfrastructureTests(unittest.TestCase):
         self.assertIn("checks", data)
         self.assertNotIn("password", data)
 
+    def test_jalali_date_conversion_api(self):
+        response = Client().get(
+            "/api/v1/calendar/convert-date/",
+            {"calendar": "jalali", "date": "۱۴۰۴/۰۱/۰۱"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {
+            "gregorian": "2025-03-21",
+            "jalali": "1404/01/01",
+        })
+
+    def test_jalali_leap_day_conversion_api(self):
+        response = Client().get(
+            "/api/v1/calendar/convert-date/",
+            {"calendar": "gregorian", "date": "2025-03-20"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {
+            "gregorian": "2025-03-20",
+            "jalali": "1403/12/30",
+        })
+
+    def test_date_conversion_rejects_invalid_input(self):
+        client = Client()
+        for params in (
+            {"calendar": "unknown", "date": "1404/01/01"},
+            {"calendar": "jalali", "date": "1404/12/30"},
+            {"calendar": "gregorian", "date": "2025-02-29"},
+            {"calendar": "gregorian", "date": "2025-03-21T00:00:00"},
+            {"calendar": "jalali"},
+        ):
+            with self.subTest(params=params):
+                response = client.get("/api/v1/calendar/convert-date/", params)
+                self.assertEqual(response.status_code, 400)
+                self.assertIn("code", response.json())
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -38,6 +38,22 @@ This contract reflects the current state of the actual backend and frontend inte
   ```
 - Failure status: HTTP 503 with a non-sensitive message if infra dependencies are unavailable
 
+### `GET /api/v1/calendar/convert-date/`
+- Status: Implemented (Phase 06 foundation)
+- Permission: AllowAny; stateless conversion with no organization data
+- Query parameters:
+  - `calendar`: `jalali` or `gregorian`
+  - `date`: `YYYY/MM/DD` for Jalali (Persian digits accepted), or `YYYY-MM-DD` for Gregorian
+- Success response:
+  ```json
+  {
+    "gregorian": "2025-03-21",
+    "jalali": "1404/01/01"
+  }
+  ```
+- Invalid calendar/date: HTTP 400 with `code` and `message_fa`
+- Jalali dates outside the supported conversion range are rejected; they are not silently approximated.
+
 ### Schema endpoints
 - `GET /api/v1/schema/` — Implemented via drf-spectacular
 - `GET /api/v1/docs/` — Implemented via Swagger UI
@@ -46,6 +62,8 @@ This contract reflects the current state of the actual backend and frontend inte
 - leave request list/create/update/actions
 - entitlement endpoints
 - holiday management endpoints
+- organization calendar, work-pattern, and timeline endpoints
+- versioned leave-policy endpoints
 - report generation endpoints
 - admin setting endpoints
 - auth session and permission endpoints
