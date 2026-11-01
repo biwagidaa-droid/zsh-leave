@@ -1,10 +1,12 @@
 import datetime as dt
+from decimal import Decimal
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 from rest_framework.test import APIClient
 
 from leave.calendar_services import create_policy_version, create_work_pattern
+from leave.entitlement_services import create_entitlement, entitlement_balance
 from leave.models import (
     AuditEvent,
     Company,
@@ -14,6 +16,7 @@ from leave.models import (
     LeaveRequestEvent,
     LeaveType,
     RoleAssignment,
+    WorkflowIdempotency,
 )
 from zsh_core import settings_schema, workflow as wf
 
@@ -37,6 +40,11 @@ class LeaveWorkflowApiTests(TestCase):
             personnel_code="E-1",
             manager=self.manager,
             start_date=dt.date(2020, 1, 1),
+        )
+        self.hr_user = user_model.objects.create_user(username="hr")
+        RoleAssignment.objects.create(
+            user=self.hr_user, role=RoleAssignment.ROLE_HR,
+            scope=RoleAssignment.SCOPE_COMPANY, company=self.company,
         )
         self.leave_type = LeaveType.objects.create(
             key="annual",
@@ -72,6 +80,8 @@ class LeaveWorkflowApiTests(TestCase):
         self.manager_client.force_authenticate(self.manager_user)
         self.other_client = APIClient()
         self.other_client.force_authenticate(self.other_user)
+        self.hr_client = APIClient()
+        self.hr_client.force_authenticate(self.hr_user)
 
     def submit(self, client, key, start, end=None):
         return client.post(
@@ -279,6 +289,110 @@ class LeaveWorkflowApiTests(TestCase):
         self.assertTrue(correction_audit.after["reason_changed"])
         self.assertEqual(LeaveRequestComment.objects.filter(request_id=request_id).count(), 1)
 
+    def test_hr_absence_is_directly_approved_and_idempotent(self):
+        counted_leave_type = LeaveType.objects.create(
+            key="counted-absence", label_fa="Counted absence", counts_against_balance=True,
+        )
+        entitlement = create_entitlement(
+            employee=self.employee, leave_type=counted_leave_type, year=1405,
+            base_days=Decimal("5"), actor=self.hr_user, reason="opening entitlement",
+            idempotency_key="hr-absence-entitlement",
+        )
+        body = {
+            "employeeId": self.employee.pk,
+            "leaveTypeKey": counted_leave_type.key,
+            "start": "2026-11-09",
+            "end": "2026-11-09",
+            "workingDays": "1",
+            "reason": "HR-recorded absence",
+        }
+
+        missing_key = self.hr_client.post(
+            "/api/v1/hr/absences/", body, format="json",
+        )
+        self.assertEqual(missing_key.status_code, 422)
+        self.assertEqual(LeaveRequest.objects.count(), 0)
+
+        created = self.hr_client.post(
+            "/api/v1/hr/absences/", body, format="json",
+            HTTP_IDEMPOTENCY_KEY="hr-absence-create",
+        )
+        self.assertEqual(created.status_code, 201, created.content)
+        request_id = created.json()["id"]
+        self.assertEqual(created.json()["status"], wf.APPROVED)
+
+        request = LeaveRequest.objects.get(pk=request_id)
+        events = list(request.events.order_by("pk"))
+        self.assertEqual(len(events), 1)
+        self.assertEqual(
+            (events[0].event, events[0].origin, events[0].from_status, events[0].to_status),
+            ("submit", "hr", "", wf.APPROVED),
+        )
+        self.assertEqual(
+            list(AuditEvent.objects.filter(
+                entity="LeaveRequest", entity_id=str(request_id),
+            ).values_list("action", flat=True)),
+            ["leave.submit"],
+        )
+        self.assertEqual(entitlement_balance(entitlement)["used"], Decimal("1.0"))
+
+        replay = self.hr_client.post(
+            "/api/v1/hr/absences/", body, format="json",
+            HTTP_IDEMPOTENCY_KEY="hr-absence-create",
+        )
+        self.assertEqual(replay.status_code, 201, replay.content)
+        self.assertEqual(replay.json()["id"], request_id)
+        self.assertEqual(LeaveRequest.objects.count(), 1)
+        self.assertEqual(LeaveRequestEvent.objects.filter(request=request).count(), 1)
+        self.assertEqual(entitlement_balance(entitlement)["used"], Decimal("1.0"))
+
+        changed_payload = {**body, "workingDays": "2"}
+        conflict = self.hr_client.post(
+            "/api/v1/hr/absences/", changed_payload, format="json",
+            HTTP_IDEMPOTENCY_KEY="hr-absence-create",
+        )
+        self.assertEqual(conflict.status_code, 409)
+        self.assertEqual(LeaveRequest.objects.count(), 1)
+
+    def test_hr_absence_rejects_unauthorized_and_rolls_back_invalid_submission(self):
+        body = {
+            "employeeId": self.employee.pk,
+            "leaveTypeKey": self.leave_type.key,
+            "start": "2026-11-09",
+            "end": "2026-11-09",
+            "workingDays": "2",
+            "reason": "Invalid day count",
+        }
+        denied = self.other_client.post(
+            "/api/v1/hr/absences/", body, format="json",
+            HTTP_IDEMPOTENCY_KEY="hr-absence-denied",
+        )
+        self.assertEqual(denied.status_code, 403)
+
+        other_company = Company.objects.create(code="HR-OTHER", name="Other company")
+        other_hr_user = get_user_model().objects.create_user(username="other-hr")
+        RoleAssignment.objects.create(
+            user=other_hr_user, role=RoleAssignment.ROLE_HR,
+            scope=RoleAssignment.SCOPE_COMPANY, company=other_company,
+        )
+        other_hr_client = APIClient()
+        other_hr_client.force_authenticate(other_hr_user)
+        out_of_scope = other_hr_client.post(
+            "/api/v1/hr/absences/", body, format="json",
+            HTTP_IDEMPOTENCY_KEY="hr-absence-out-of-scope",
+        )
+        self.assertEqual(out_of_scope.status_code, 404)
+
+        invalid = self.hr_client.post(
+            "/api/v1/hr/absences/", body, format="json",
+            HTTP_IDEMPOTENCY_KEY="hr-absence-invalid",
+        )
+        self.assertEqual(invalid.status_code, 422)
+        self.assertEqual(LeaveRequest.objects.count(), 0)
+        self.assertEqual(LeaveRequestEvent.objects.count(), 0)
+        self.assertEqual(AuditEvent.objects.filter(entity="LeaveRequest").count(), 0)
+        self.assertEqual(WorkflowIdempotency.objects.count(), 0)
+
     def test_scope_and_transition_permissions_are_enforced(self):
         response = self.submit(self.employee_client, "submit-scope", "2026-11-02")
         request_id = response.json()["id"]
@@ -384,22 +498,13 @@ class LeaveWorkflowApiTests(TestCase):
             "",
         )
 
-        hr_user = get_user_model().objects.create_user(username="hr")
-        RoleAssignment.objects.create(
-            user=hr_user,
-            role=RoleAssignment.ROLE_HR,
-            scope=RoleAssignment.SCOPE_COMPANY,
-            company=self.company,
-        )
-        hr_client = APIClient()
-        hr_client.force_authenticate(hr_user)
         self.assertEqual(
-            hr_client.get(
+            self.hr_client.get(
                 f"/api/v1/leave-requests/{request.pk}/events/",
             ).json()[0]["reason"],
             "Sensitive event reason",
         )
-        comment = hr_client.post(
+        comment = self.hr_client.post(
             f"/api/v1/leave-requests/{request.pk}/comments/",
             {"body": "HR-only note"},
             format="json",

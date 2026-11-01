@@ -10,7 +10,7 @@
 | Contracts | `/employees/{id}/contract-periods/` | GET/POST | HR | عدم هم‌پوشانی بازه |
 | Leave types | `/leave-types/` | GET؛ POST/PATCH | همه (فیلترشده)؛ HR/سامانه | نوع محرمانه برای غیر HR حذف می‌شود |
 | Requests | `/leave-requests/` GET/POST؛ `/{id}/` GET/PATCH؛ `/{id}/approve|reject|cancel|withdraw|amend` POST | | طبق ماتریس | پیاده‌سازی Phase D؛ همه نوشتن‌ها Idempotency-Key دارند؛ انتقال، اصلاح، رویداد و Audit اتمیک |
-| HR record | `/hr/absences/` POST/PATCH | | HR | در این مرحله پیاده‌سازی نشده |
+| HR record | `/hr/absences/` POST | | HR دامنه‌دار | ایجاد مستقیم در وضعیت `APPROVED`؛ `Idempotency-Key` الزامی؛ رویداد ثبت و اثر دفترکل در همان تراکنش |
 | Comments | `/leave-requests/{id}/comments/` | GET/POST | طرفین مجاز | پیاده‌سازی‌شده؛ ممنوع برای نوع محرمانه غیر HR |
 | Event history | `/leave-requests/{id}/events/` | GET | مالک، مدیر snapshot، HR مجاز | پیاده‌سازی‌شده؛ دلیل رویداد محرمانه فقط برای HR |
 | Attachments | `/leave-requests/{id}/attachments/` POST؛ `/attachments/{id}/download` GET | | HR/مالک مجاز | هر دانلود ثبت می‌شود |

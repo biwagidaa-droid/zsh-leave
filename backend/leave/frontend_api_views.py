@@ -16,8 +16,11 @@ from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
 from zsh_core import settings_schema
+from zsh_core.permissions import HR as POLICY_HR, Viewer, visible_balance_types
 from . import admin_services
-from .authorization import authorization_context, scoped_employees, scoped_hr_leave_requests
+from .authorization import (
+    authorization_context, scoped_employees, scoped_hr_employees, scoped_hr_leave_requests,
+)
 from .entitlement_services import (
     EntitlementLedgerError,
     adjust_entitlement,
@@ -125,6 +128,25 @@ def _balance_json(item: LeaveEntitlement) -> dict:
     }
 
 
+def _visible_entitlement_rows(context, rows) -> list[LeaveEntitlement]:
+    visible = []
+    for item in rows:
+        employee = item.employee
+        is_scoped_hr = _hr(context, employee)
+        viewer = Viewer(
+            user_id=context.user.pk,
+            roles=frozenset({POLICY_HR}) if is_scoped_hr else frozenset(),
+            hr_company_ids=frozenset({employee.company_id}) if is_scoped_hr else frozenset(),
+        )
+        if visible_balance_types(
+            viewer,
+            employee.company_id,
+            [{"id": item.leave_type_id, "confidential": item.leave_type.confidential}],
+        ):
+            visible.append(item)
+    return visible
+
+
 @api_view(["GET", "POST", "PATCH"])
 def leave_types(request, type_id: int | None = None):
     context = _context(request)
@@ -178,7 +200,9 @@ def balances(request):
         return _failure("invalid_filter", "سال یا شناسه کارمند معتبر نیست", 400)
     if employee_id is None:
         return _failure("employee_profile_required", "پرونده کارمندی لازم است", 403)
-    employee = _employee_rows(context).filter(pk=employee_id).first()
+    employee = scoped_employees(context).select_related(
+        "company", "site", "department",
+    ).filter(pk=employee_id).first()
     if employee is None:
         raise Http404
     entries = LeaveEntitlement.objects.select_related("employee__user", "leave_type").filter(
@@ -187,7 +211,8 @@ def balances(request):
     from .entitlement_services import EntitlementReconciliationError
 
     try:
-        return Response([_balance_json(item) for item in entries])
+        visible_entries = _visible_entitlement_rows(context, entries)
+        return Response([_balance_json(item) for item in visible_entries])
     except EntitlementReconciliationError:
         return _failure("entitlement_reconciliation", "دفترکل سهمیه نیازمند بررسی است", 409)
 
@@ -195,19 +220,21 @@ def balances(request):
 @api_view(["GET"])
 def entitlements(request):
     context = _context(request)
-    if not (context.has_role("hr") or _admin(context)):
+    if not context.has_role("hr"):
         return _failure("permission_denied", "مشاهده سهمیه‌های کارکنان مجاز نیست", 403)
     try:
         year = int(request.query_params.get("year", ""))
     except ValueError:
         return _failure("invalid_year", "سال معتبر نیست", 400)
-    employee_ids = _employee_rows(context).values("pk")
+    employee_ids = scoped_hr_employees(context).values("pk")
     rows = LeaveEntitlement.objects.select_related(
-        "employee__user", "leave_type",
+        "employee__user", "employee__company", "employee__site", "employee__department", "leave_type",
     ).filter(employee_id__in=employee_ids, year=year).order_by(
         "employee__user__last_name", "employee__user__first_name", "leave_type__sort_order",
     )
-    return Response([_entitlement_json(item) for item in rows])
+    return Response([
+        _entitlement_json(item) for item in _visible_entitlement_rows(context, rows)
+    ])
 
 
 @api_view(["POST"])
@@ -613,6 +640,8 @@ def coverage(request):
     else:
         return _failure("permission_denied", "دامنه گزارش پوشش مشخص نیست", 403)
     approved = eligible.filter(status="APPROVED", start_date__lte=end, end_date__gte=start)
+    if not context.has_role("hr"):
+        approved = approved.filter(leave_type__confidential=False)
     department_ids = employee_rows.values_list("department_id", flat=True)
     departments = Department.objects.filter(pk__in=department_ids).distinct()
     result = []
@@ -656,7 +685,8 @@ def reports(request, kind: str):
         })["privacy.min_group_size"]
     except settings_schema.SettingError as exc:
         return _failure("invalid_settings", str(exc), 409)
-    approved = rows.filter(status="APPROVED")
+    report_rows = rows if context.has_role("hr") else rows.filter(leave_type__confidential=False)
+    approved = report_rows.filter(status="APPROVED")
     if kind == "absences":
         categories = approved.values("leave_type__label_fa").annotate(
             total=Count("pk"), people=Count("employee_id", distinct=True),
@@ -666,7 +696,10 @@ def reports(request, kind: str):
             for item in categories if item["people"] >= min_size
         ]
     elif kind == "balances":
-        count = LeaveEntitlement.objects.filter(employee_id__in=people.values("pk")).values(
+        entitlements = LeaveEntitlement.objects.filter(employee_id__in=people.values("pk"))
+        if not context.has_role("hr"):
+            entitlements = entitlements.filter(leave_type__confidential=False)
+        count = entitlements.values(
             "employee_id",
         ).distinct().count()
         series = [{"label": "دارای سهمیه", "value": count}] if count >= min_size else []
@@ -679,7 +712,7 @@ def reports(request, kind: str):
             for item in categories if item["people"] >= min_size
         ]
     elif kind == "process-health":
-        categories = rows.values("status").annotate(
+        categories = report_rows.values("status").annotate(
             total=Count("pk"), people=Count("employee_id", distinct=True),
         ).order_by("status")
         series = [
@@ -850,7 +883,7 @@ def request_attachment_download(request, request_id: int, attachment_id: int):
 
 @api_view(["POST"])
 def hr_absence(request):
-    from .services import apply_event, run_idempotent, submit_request
+    from .services import run_idempotent, submit_request
     from .workflow_views import (
         _payload, _request_body, _submit_permission, _workflow_error,
     )
@@ -872,25 +905,23 @@ def hr_absence(request):
         if fields["replacement_id"] is not None and replacement is None:
             raise ValueError("جانشین معتبر نیست")
 
-        def create_and_approve():
-            result = submit_request(
+        def create_absence():
+            return submit_request(
                 user=request.user, employee=employee, leave_type=leave_type,
                 start=fields["start"], end=fields["end"], reason=fields["reason"],
                 replacement=replacement, working_days=fields["working_days"],
-            )
-            return apply_event(
-                request_id=result.pk, user=request.user, event="approve",
-                reason="ثبت غیبت توسط HR",
             )
 
         with transaction.atomic():
             result = run_idempotent(
                 user=request.user,
-                key=request.headers.get("Idempotency-Key", "") or str(uuid4()),
+                key=request.headers.get("Idempotency-Key", ""),
                 operation="hr.absence",
                 payload={"employeeId": employee.pk, "leaveTypeKey": leave_type.key,
-                         "start": fields["start"], "end": fields["end"], "reason": fields["reason"]},
-                model=LeaveRequest, callback=create_and_approve,
+                         "start": fields["start"], "end": fields["end"], "reason": fields["reason"],
+                         "workingDays": fields["working_days"],
+                         "replacementId": fields["replacement_id"]},
+                model=LeaveRequest, callback=create_absence,
             )
         return Response(_payload(result, context), status=201)
     except (EmployeeProfile.DoesNotExist, LeaveType.DoesNotExist):

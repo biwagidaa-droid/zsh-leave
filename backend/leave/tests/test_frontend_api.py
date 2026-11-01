@@ -1,4 +1,5 @@
 import datetime as dt
+import json
 import tempfile
 from decimal import Decimal
 
@@ -17,6 +18,7 @@ from leave.models import (
     LeaveRequestEvent,
     LeaveType,
     RoleAssignment,
+    SystemSetting,
 )
 
 
@@ -43,6 +45,10 @@ class FrontendApiTests(TestCase):
         )
         self.leave_type = LeaveType.objects.create(
             key="annual", label_fa="استحقاقی", counts_against_balance=True,
+        )
+        self.confidential_type = LeaveType.objects.create(
+            key="medical", label_fa="محرمانه‌پزشکی", counts_against_balance=True,
+            employee_requestable=False, confidential=True,
         )
         self.client = APIClient()
         self.client.force_authenticate(self.hr_user)
@@ -124,6 +130,193 @@ class FrontendApiTests(TestCase):
             self.client.get(f"/api/v1/employees/{self.employee.pk}/contract-periods/").json()[0]["workDays"],
             [5, 6, 0, 1, 2],
         )
+
+    def test_confidential_balances_require_hr_scope(self):
+        create_entitlement(
+            employee=self.employee, leave_type=self.leave_type, year=1405,
+            base_days=Decimal("20"), actor=self.hr_user, reason="opening",
+            idempotency_key="privacy-annual",
+        )
+        create_entitlement(
+            employee=self.employee, leave_type=self.confidential_type, year=1405,
+            base_days=Decimal("4"), actor=self.hr_user, reason="opening",
+            idempotency_key="privacy-confidential",
+        )
+
+        self.client.force_authenticate(self.employee_user)
+        own = self.client.get(f"/api/v1/balances/?year=1405&employee={self.employee.pk}")
+        self.assertEqual(own.status_code, 200)
+        self.assertEqual([row["leaveTypeKey"] for row in own.json()], ["annual"])
+        self.assertNotIn("محرمانه", own.content.decode())
+
+        manager_user = get_user_model().objects.create_user(username="privacy-manager")
+        manager = EmployeeProfile.objects.create(
+            user=manager_user, company=self.company, department=self.department,
+            personnel_code="M-1", start_date=dt.date(2020, 1, 1),
+        )
+        self.employee.manager = manager
+        self.employee.save(update_fields=["manager"])
+        self.client.force_authenticate(manager_user)
+        team = self.client.get(f"/api/v1/balances/?year=1405&employee={self.employee.pk}")
+        self.assertEqual(team.status_code, 200)
+        self.assertEqual([row["leaveTypeKey"] for row in team.json()], ["annual"])
+
+        LeaveRequest.objects.create(
+            employee=self.employee, manager_snapshot=manager, leave_type=self.confidential_type,
+            start_date=dt.date(2026, 11, 2), end_date=dt.date(2026, 11, 2),
+            working_days=Decimal("1"), status="APPROVED",
+        )
+        LeaveRequest.objects.create(
+            employee=self.employee, manager_snapshot=manager, leave_type=self.leave_type,
+            start_date=dt.date(2026, 11, 3), end_date=dt.date(2026, 11, 3),
+            working_days=Decimal("1"), status="APPROVED",
+        )
+        coverage = self.client.get(
+            "/api/v1/coverage/?from=2026-11-02&to=2026-11-03",
+        )
+        self.assertEqual(coverage.status_code, 200)
+        coverage_by_day = {row["date"]: row["awayCount"] for row in coverage.json()}
+        self.assertEqual(coverage_by_day["2026-11-02"], 0)
+        self.assertEqual(coverage_by_day["2026-11-03"], 1)
+
+        self.client.force_authenticate(self.hr_user)
+        scoped_hr = self.client.get(f"/api/v1/balances/?year=1405&employee={self.employee.pk}")
+        self.assertEqual(scoped_hr.status_code, 200)
+        self.assertEqual(
+            {row["leaveTypeKey"] for row in scoped_hr.json()}, {"annual", "medical"},
+        )
+        hr_coverage = self.client.get("/api/v1/coverage/?from=2026-11-02&to=2026-11-02")
+        self.assertEqual(hr_coverage.status_code, 200)
+        self.assertEqual(hr_coverage.json()[0]["awayCount"], 1)
+
+        other_company = Company.objects.create(code="PRIVACY-2", name="Other company")
+        other_employee_user = get_user_model().objects.create_user(username="privacy-other")
+        other_employee = EmployeeProfile.objects.create(
+            user=other_employee_user, company=other_company, personnel_code="E-2",
+            start_date=dt.date(2020, 1, 1),
+        )
+        other_hr_user = get_user_model().objects.create_user(username="privacy-other-hr")
+        RoleAssignment.objects.create(
+            user=other_hr_user, role=RoleAssignment.ROLE_HR,
+            scope=RoleAssignment.SCOPE_COMPANY, company=other_company,
+        )
+        self.client.force_authenticate(other_hr_user)
+        out_of_scope = self.client.get(
+            f"/api/v1/balances/?year=1405&employee={self.employee.pk}",
+        )
+        self.assertEqual(out_of_scope.status_code, 404)
+
+        admin = get_user_model().objects.create_superuser(
+            username="privacy-admin", password="unused",
+        )
+        self.client.force_authenticate(admin)
+        admin_response = self.client.get(
+            f"/api/v1/balances/?year=1405&employee={other_employee.pk}",
+        )
+        self.assertEqual(admin_response.status_code, 404)
+
+    def test_entitlements_hide_confidential_data_outside_hr_scope(self):
+        create_entitlement(
+            employee=self.employee, leave_type=self.confidential_type, year=1405,
+            base_days=Decimal("4"), actor=self.hr_user, reason="opening",
+            idempotency_key="privacy-entitlement-in-scope",
+        )
+        self.client.force_authenticate(self.employee_user)
+        self.assertEqual(self.client.get("/api/v1/entitlements/?year=1405").status_code, 403)
+
+        self.client.force_authenticate(self.hr_user)
+        in_scope = self.client.get("/api/v1/entitlements/?year=1405")
+        self.assertEqual(in_scope.status_code, 200)
+        self.assertEqual([row["leaveTypeKey"] for row in in_scope.json()], ["medical"])
+
+        other_company = Company.objects.create(code="ENT-OTHER", name="Other company")
+        other_employee_user = get_user_model().objects.create_user(username="entitlement-other")
+        other_employee = EmployeeProfile.objects.create(
+            user=other_employee_user, company=other_company, personnel_code="E-3",
+            start_date=dt.date(2020, 1, 1),
+        )
+        create_entitlement(
+            employee=other_employee, leave_type=self.confidential_type, year=1405,
+            base_days=Decimal("8"), actor=self.hr_user, reason="opening",
+            idempotency_key="privacy-entitlement-out-of-scope",
+        )
+        other_hr_user = get_user_model().objects.create_user(username="entitlement-other-hr")
+        RoleAssignment.objects.create(
+            user=other_hr_user, role=RoleAssignment.ROLE_HR,
+            scope=RoleAssignment.SCOPE_COMPANY, company=other_company,
+        )
+        mixed_user = get_user_model().objects.create_user(username="entitlement-mixed")
+        mixed_employee = EmployeeProfile.objects.create(
+            user=mixed_user, company=self.company, department=self.department,
+            personnel_code="MIXED-1", start_date=dt.date(2020, 1, 1),
+        )
+        RoleAssignment.objects.create(
+            user=mixed_user, role=RoleAssignment.ROLE_HR,
+            scope=RoleAssignment.SCOPE_COMPANY, company=other_company,
+        )
+        create_entitlement(
+            employee=mixed_employee, leave_type=self.leave_type, year=1405,
+            base_days=Decimal("10"), actor=self.hr_user, reason="opening",
+            idempotency_key="privacy-entitlement-mixed-scope",
+        )
+        self.client.force_authenticate(other_hr_user)
+        out_of_scope = self.client.get("/api/v1/entitlements/?year=1405")
+        self.assertEqual(out_of_scope.status_code, 200)
+        self.assertEqual(
+            {row["employeeId"] for row in out_of_scope.json()}, {other_employee.pk},
+        )
+        self.client.force_authenticate(mixed_user)
+        mixed_scope = self.client.get("/api/v1/entitlements/?year=1405")
+        self.assertEqual(mixed_scope.status_code, 200)
+        self.assertEqual(
+            {row["employeeId"] for row in mixed_scope.json()}, {other_employee.pk},
+        )
+        self.assertNotIn(mixed_employee.pk, {row["employeeId"] for row in mixed_scope.json()})
+
+        admin = get_user_model().objects.create_superuser(
+            username="entitlement-admin", password="unused",
+        )
+        self.client.force_authenticate(admin)
+        self.assertEqual(self.client.get("/api/v1/entitlements/?year=1405").status_code, 403)
+
+    def test_executive_reports_exclude_confidential_records_and_balances(self):
+        SystemSetting.objects.create(key="privacy.min_group_size", value=2)
+        second_user = get_user_model().objects.create_user(username="report-second")
+        second_employee = EmployeeProfile.objects.create(
+            user=second_user, company=self.company, department=self.department,
+            personnel_code="E-2", start_date=dt.date(2020, 1, 1),
+        )
+        for employee, key in ((self.employee, "report-confidential-1"),
+                              (second_employee, "report-confidential-2")):
+            LeaveRequest.objects.create(
+                employee=employee, leave_type=self.confidential_type,
+                start_date=dt.date(2026, 11, 2), end_date=dt.date(2026, 11, 2),
+                working_days=Decimal("1"), status="APPROVED",
+            )
+            create_entitlement(
+                employee=employee, leave_type=self.confidential_type, year=1405,
+                base_days=Decimal("4"), actor=self.hr_user, reason="opening",
+                idempotency_key=key,
+            )
+        exec_user = get_user_model().objects.create_user(username="privacy-exec")
+        RoleAssignment.objects.create(
+            user=exec_user, role=RoleAssignment.ROLE_EXEC,
+            scope=RoleAssignment.SCOPE_COMPANY, company=self.company,
+        )
+        self.client.force_authenticate(exec_user)
+
+        for kind in ("absences", "trends", "process-health", "balances"):
+            with self.subTest(report=kind):
+                response = self.client.get(f"/api/v1/reports/{kind}")
+                self.assertEqual(response.status_code, 200)
+                self.assertNotIn("medical", json.dumps(response.json()))
+                self.assertNotIn("محرمانه", response.content.decode())
+                self.assertEqual(response.json()["series"], [])
+
+        self.client.force_authenticate(self.hr_user)
+        hr_absences = self.client.get("/api/v1/reports/absences")
+        self.assertEqual(hr_absences.status_code, 200)
+        self.assertEqual(hr_absences.json()["series"][0]["label"], "محرمانه‌پزشکی")
 
     def test_notifications_are_persistently_marked_read_and_notes_are_saved(self):
         request = LeaveRequest.objects.create(

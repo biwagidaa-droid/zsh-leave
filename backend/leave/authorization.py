@@ -206,6 +206,17 @@ def scoped_employees(context: AuthorizationContext) -> QuerySet[EmployeeProfile]
     if context.employee_id:
         filters |= Q(pk=context.employee_id)
         filters |= Q(manager_id=context.employee_id, company_id=context.employee.company_id)
+    filters |= Q(pk__in=scoped_hr_employees(context).values("pk"))
+    return EmployeeProfile.objects.filter(filters, is_employee=True).distinct() if filters else (
+        EmployeeProfile.objects.none()
+    )
+
+
+def scoped_hr_employees(context: AuthorizationContext) -> QuerySet[EmployeeProfile]:
+    """Return only employees inside active HR assignments, excluding personal/team access."""
+    if not getattr(context.user, "is_active", False):
+        return EmployeeProfile.objects.none()
+    filters = Q()
     for assignment in context.assignments:
         if assignment.role != HR:
             continue

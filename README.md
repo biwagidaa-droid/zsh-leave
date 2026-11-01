@@ -59,3 +59,7 @@ npm run build
 ## استقرار
 
 تنظیمات production در `config.settings_prod` قرار دارد و به PostgreSQL، کلید معتبر و `ZSH_ALLOWED_HOSTS` نیاز دارد. این مخزن manifest استقرار، CI/CD، reverse proxy، backup/restore یا پایش عملیاتی فراهم نمی‌کند. قبل از استفاده واقعی، [چک‌لیست آمادگی تولید](docs/final-documentation/09-production-readiness-checklist.md) و [راهنمای مدیر سامانه](docs/final-documentation/06-system-administrator-guide.md) را بررسی و همه gateهای محیط هدف را با شواهد ببندید.
+
+## وضعیت اصلاحات مهندسی
+
+گزارش baseline، شواهد آزمون، محدودیت‌ها و وضعیت gateهای این remediation در [مستندات اصلاح](docs/remediation/PROGRESS.md) نگهداری می‌شود. نتایج فعلی به معنی آمادگی production نیست.

@@ -125,7 +125,7 @@ These endpoints back the remaining frontend pages. They require an authenticated
 | GET | `/api/v1/entitlements/?year={year}` | List in-scope HR entitlements. |
 | POST | `/api/v1/entitlements/{id}/adjust` | Append a ledger adjustment; `{days, reason}` is required. |
 | POST | `/api/v1/entitlements/import/?dry_run=0\|1` | Validate CSV (`personnel_code,type,year,days`). Commit is all-or-nothing and uses the entitlement ledger. |
-| POST | `/api/v1/hr/absences/` | Submit and approve an absence for an employee in the caller's HR scope. |
+| POST | `/api/v1/hr/absences/` | Create an absence for an employee in the caller's HR scope. HR-originated requests enter `APPROVED` directly through `submit_request`; exactly one `submit` event records the transition from empty to approved. `Idempotency-Key` is required; the payload fingerprint covers employee, type, dates, working days, reason, and replacement. The request, event, audit entry, ledger posting, and idempotency record commit atomically. |
 | GET | `/api/v1/employees/`, `/api/v1/companies/`, `/api/v1/departments/` | Read employee/organization rows scoped to the caller. Employee search accepts `q`. Employee creation is HR/admin; company and department writes are admin-only. |
 | GET/POST | `/api/v1/employees/{id}/contract-periods/` | Read/add validated employee work-contract periods; HR must have scope for the employee. |
 | GET | `/api/v1/coverage/?from={date}&to={date}` | Aggregate approved absences per department/day for the caller's HR or manager scope; maximum 93 days. |
