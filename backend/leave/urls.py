@@ -14,6 +14,12 @@ from .calendar_views import (
     work_patterns_history,
 )
 from .authentication import change_password, current_user, login, logout
+from .invitation_views import (
+    activate_account,
+    employee_invitation,
+    revoke_employee_invitation,
+    suspend_employee_account,
+)
 from .views import convert_calendar_date, health_check, readiness_check
 from .role_assignment_views import role_assignment_detail, role_assignments
 from .frontend_api_views import (
@@ -53,6 +59,7 @@ urlpatterns = [
     path("auth/logout", logout, name="auth-logout"),
     path("auth/me", current_user, name="auth-me"),
     path("auth/password", change_password, name="auth-password"),
+    path("auth/activate", activate_account, name="auth-activate"),
     path("admin/role-assignments/", role_assignments, name="role-assignments"),
     path("admin/role-assignments/<int:assignment_id>/", role_assignment_detail,
          name="role-assignment-detail"),
@@ -70,6 +77,12 @@ urlpatterns = [
     path("notifications/<int:notification_id>/read", notification_read, name="notification-read"),
     path("employees/", employees, name="employees"),
     path("employees/<int:employee_id>/", employees, name="employee-detail"),
+    path("employees/<int:employee_id>/invitation/", employee_invitation,
+         name="employee-invitation"),
+    path("employees/<int:employee_id>/invitation/revoke", revoke_employee_invitation,
+         name="employee-invitation-revoke"),
+    path("employees/<int:employee_id>/suspend", suspend_employee_account,
+         name="employee-account-suspend"),
     path("employees/<int:employee_id>/contract-periods/", contracts, name="employee-contracts"),
     path("companies/", companies, name="companies"),
     path("companies/<int:company_id>/", companies, name="company-detail"),

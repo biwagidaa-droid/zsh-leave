@@ -11,6 +11,7 @@ from rest_framework.response import Response
 from rest_framework.throttling import AnonRateThrottle
 
 from .authorization import authorization_context
+from .invitation_services import account_access_allowed
 from .models import AuditEvent, EmployeeProfile
 
 logger = logging.getLogger("leave.auth")
@@ -110,7 +111,7 @@ def login(request):
         return _invalid_request({"credentials": "نام کاربری و رمز عبور الزامی است"})
 
     user = authenticate(request=request, username=username, password=password)
-    if user is None:
+    if user is None or not account_access_allowed(user):
         _record_auth_event("auth.login.failed", username, result="failed")
         logger.warning("Authentication failed")
         return Response(

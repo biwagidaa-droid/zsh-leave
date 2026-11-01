@@ -28,6 +28,12 @@ from .entitlement_services import (
     create_entitlement,
     entitlement_balance,
 )
+from .invitation_services import (
+    InvitationError,
+    invite_employee,
+    normalize_email,
+    synchronize_employment_access,
+)
 from .models import (
     AuditEvent,
     BradfordNote,
@@ -96,6 +102,7 @@ def _employee_json(employee: EmployeeProfile) -> dict:
         "startDate": employee.start_date.isoformat(),
         "endDate": employee.end_date.isoformat() if employee.end_date else None,
         "isActive": employee.end_date is None,
+        "accountStatus": employee.account_status,
     }
 
 
@@ -364,9 +371,20 @@ def employees(request, employee_id: int | None = None):
         employee = hr_operation_employees(context).get(pk=employee_id) if employee_id is not None else None
     except EmployeeProfile.DoesNotExist:
         raise Http404
-    allowed = {"displayName", "personnelCode", "companyId", "departmentId", "managerId", "startDate", "endDate"}
+    allowed = {
+        "displayName", "personnelCode", "companyId", "departmentId", "managerId",
+        "startDate", "endDate", "email",
+    }
     if set(data) - allowed or not {"displayName", "personnelCode", "companyId"}.issubset(data):
         return _failure("invalid_payload", "نام، کد پرسنلی و شرکت الزامی است", 400)
+    if employee is not None and "email" in data:
+        return _failure("invalid_payload", "برای تغییر ایمیل از فرایند دعوت استفاده کنید", 400)
+    invitation_email = None
+    if "email" in data:
+        try:
+            invitation_email = normalize_email(data["email"])
+        except InvitationError:
+            return _failure("invalid_employee", "نشانی ایمیل معتبر نیست", 400)
     if not isinstance(data["displayName"], str) or not isinstance(data["personnelCode"], str):
         return _failure("invalid_payload", "نام و کد پرسنلی باید متن باشند", 400)
     try:
@@ -391,16 +409,23 @@ def employees(request, employee_id: int | None = None):
         code = data["personnelCode"].strip()
         if not display_name or not code:
             raise ValueError("نام و کد پرسنلی الزامی است")
+        created = employee is None
         with transaction.atomic():
             if employee is None:
                 username = f"emp-{company.pk}-{code}"
                 if User.objects.filter(username=username).exists():
                     return _failure("duplicate_user", "حساب کاربری با این کد وجود دارد", 409)
-                user = User(username=username, first_name=display_name)
+                user = User(
+                    username=username,
+                    first_name=display_name,
+                    email=invitation_email or "",
+                    is_active=False,
+                )
                 user.set_unusable_password()
                 user.save()
                 employee = EmployeeProfile(
                     user=user, company=company, personnel_code=code, start_date=start,
+                    account_status=EmployeeProfile.ACCOUNT_CREATED,
                 )
             else:
                 user = employee.user
@@ -415,13 +440,41 @@ def employees(request, employee_id: int | None = None):
                 raise ValueError("مدیر باید متعلق به شرکت انتخاب‌شده باشد")
             employee.full_clean()
             employee.save()
+            synchronize_employment_access(employee=employee, actor=request.user)
     except (Company.DoesNotExist, Department.DoesNotExist, EmployeeProfile.DoesNotExist):
         return _failure("related_object_not_found", "شرکت، واحد یا مدیر پیدا نشد", 404)
     except (ValueError, TypeError, ValidationError) as exc:
         return _failure("invalid_employee", str(exc), 400)
     except IntegrityError:
         return _failure("duplicate_employee", "کد پرسنلی قبلاً در این شرکت ثبت شده است", 409)
-    return Response(_employee_json(employee), status=201 if employee_id is None else 200)
+    invitation_result = None
+    if (
+        created
+        and invitation_email
+        and employee.account_status != EmployeeProfile.ACCOUNT_OFFBOARDED
+    ):
+        try:
+            invitation_result = invite_employee(
+                employee_id=employee.pk,
+                actor=request.user,
+            )
+        except InvitationError:
+            return _failure("invitation_failed", "دعوت کاربر ایجاد نشد", 500)
+        employee.refresh_from_db()
+    result = _employee_json(employee)
+    if invitation_result:
+        result["invitationStatus"] = invitation_result.status
+        result["invitationDelivery"] = (
+            "sent" if invitation_result.status == "sent" else "unavailable"
+        )
+        result["invitationMessageFa"] = (
+            "دعوت ارسال شد"
+            if invitation_result.status == "sent"
+            else "دعوت ذخیره شد اما سرویس ایمیل در دسترس نیست"
+        )
+        if invitation_result.development_url:
+            result["developmentActivationUrl"] = invitation_result.development_url
+    return Response(result, status=201 if employee_id is None else 200)
 
 
 def _company_json(item: Company) -> dict:

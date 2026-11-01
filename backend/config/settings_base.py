@@ -92,6 +92,28 @@ AUTH_PASSWORD_VALIDATORS = [
     },
 ]
 
+EMAIL_BACKEND = env(
+    "ZSH_EMAIL_BACKEND",
+    "django.core.mail.backends.smtp.EmailBackend",
+)
+EMAIL_HOST = env("ZSH_EMAIL_HOST", "")
+EMAIL_PORT = int(env("ZSH_EMAIL_PORT", "587"))
+EMAIL_HOST_USER = env("ZSH_EMAIL_USER", "")
+EMAIL_HOST_PASSWORD = env("ZSH_EMAIL_PASSWORD", "")
+EMAIL_USE_TLS = env("ZSH_EMAIL_USE_TLS", "1").lower() in {"1", "true", "yes", "on"}
+EMAIL_USE_SSL = env("ZSH_EMAIL_USE_SSL", "0").lower() in {"1", "true", "yes", "on"}
+if EMAIL_USE_TLS and EMAIL_USE_SSL:
+    raise RuntimeError("Enable either ZSH_EMAIL_USE_TLS or ZSH_EMAIL_USE_SSL, not both.")
+DEFAULT_FROM_EMAIL = env("ZSH_DEFAULT_FROM_EMAIL", "")
+ZSH_EMAIL_ENABLED = env("ZSH_EMAIL_ENABLED", "0").lower() in {"1", "true", "yes", "on"}
+ZSH_INVITATION_TOKEN_TTL_HOURS = int(env("ZSH_INVITATION_TOKEN_TTL_HOURS", "72"))
+ZSH_INVITATION_EXPOSE_DEV_LINKS = (
+    env("ZSH_INVITATION_EXPOSE_DEV_LINKS", "0").lower() in {"1", "true", "yes", "on"}
+)
+ZSH_PUBLIC_BASE_URL = env("ZSH_PUBLIC_BASE_URL", "")
+if ZSH_INVITATION_TOKEN_TTL_HOURS < 1:
+    raise RuntimeError("ZSH_INVITATION_TOKEN_TTL_HOURS must be positive.")
+
 PASSWORD_HASHERS = [
     "django.contrib.auth.hashers.Argon2PasswordHasher",
     "django.contrib.auth.hashers.PBKDF2PasswordHasher",
@@ -116,7 +138,13 @@ REST_FRAMEWORK = {
     "DEFAULT_PERMISSION_CLASSES": [
         "rest_framework.permissions.IsAuthenticated",
     ],
-    "DEFAULT_THROTTLE_RATES": {"user": "120/min", "anon": "20/min", "auth_login": "5/min"},
+    "DEFAULT_THROTTLE_RATES": {
+        "user": "120/min",
+        "anon": "20/min",
+        "auth_login": "5/min",
+        "activation": "5/min",
+        "employee_invitation": "10/hour",
+    },
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
 }
 

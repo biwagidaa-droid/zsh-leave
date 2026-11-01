@@ -5,7 +5,9 @@
 | گروه | Endpoint | روش | نقش‌ها | نکات |
 |------|----------|-----|--------|------|
 | Auth | `/auth/login`, `/auth/logout`, `/auth/me`, `/auth/password` | POST/GET | همه | پیاده‌سازی‌شده؛ نشست، CSRF، محدودسازی ورود و ثبت تلاش ناموفق |
-| Users/Employees | `/employees/`, `/employees/{id}/` | GET/POST/PATCH | HR، مدیر (فقط خواندنِ زیرمجموعه)، سامانه | scope؛ جستجوی جانشین `/employees/search` فقط افراد فعال و مجاز |
+| Account activation | `/auth/activate` | POST | عمومی، با توکن یک‌بارمصرف | تنظیم رمز با validator جنگو، تطبیق ایمیل و محدودسازی نرخ؛ پاسخ خطا عمومی |
+| Users/Employees | `/employees/`, `/employees/{id}/` | GET/POST/PATCH | HR، مدیر (فقط خواندنِ زیرمجموعه)، سامانه | scope؛ ساخت با `email` اختیاری؛ وضعیت چرخه در خروجی |
+| Employee invitations | `/employees/{id}/invitation/`, `/invitation/revoke`, `/suspend` | POST | HR دامنه‌دار، مدیر سامانه | ارسال/ارسال مجدد، لغو دعوت یا تعلیق؛ توکن قبلی باطل می‌شود؛ بدون Frontend |
 | Organization | `/companies/`, `/departments/`, `/positions/` | CRUD | مدیر سامانه | ممنوعیت حذف دارای وابسته |
 | Contracts | `/employees/{id}/contract-periods/` | GET/POST | HR | عدم هم‌پوشانی بازه |
 | Leave types | `/leave-types/` | GET؛ POST/PATCH | همه (فیلترشده)؛ HR/سامانه | نوع محرمانه برای غیر HR حذف می‌شود |

@@ -40,6 +40,25 @@ class Department(models.Model):
 
 
 class EmployeeProfile(models.Model):
+    ACCOUNT_CREATED = "created"
+    INVITATION_PENDING = "invitation_pending"
+    INVITATION_SENT = "invitation_sent"
+    INVITATION_EXPIRED = "invitation_expired"
+    INVITATION_REVOKED = "invitation_revoked"
+    ACCOUNT_ACTIVATED = "account_activated"
+    ACCOUNT_SUSPENDED = "account_suspended"
+    ACCOUNT_OFFBOARDED = "account_offboarded"
+    ACCOUNT_STATUS_CHOICES = [
+        (ACCOUNT_CREATED, "Employee record created"),
+        (INVITATION_PENDING, "Invitation pending"),
+        (INVITATION_SENT, "Invitation sent"),
+        (INVITATION_EXPIRED, "Invitation expired"),
+        (INVITATION_REVOKED, "Invitation revoked"),
+        (ACCOUNT_ACTIVATED, "Account activated"),
+        (ACCOUNT_SUSPENDED, "Account suspended"),
+        (ACCOUNT_OFFBOARDED, "Account offboarded"),
+    ]
+
     user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.PROTECT)
     company = models.ForeignKey(Company, on_delete=models.PROTECT)
     site = models.ForeignKey(OrganizationSite, null=True, blank=True, on_delete=models.PROTECT)
@@ -50,12 +69,62 @@ class EmployeeProfile(models.Model):
     start_date = models.DateField()
     end_date = models.DateField(null=True, blank=True)
     is_employee = models.BooleanField(default=True)   # حساب سرویس/مهمان = False
+    account_status = models.CharField(
+        max_length=24, choices=ACCOUNT_STATUS_CHOICES, default=ACCOUNT_ACTIVATED,
+    )
+    email_verified_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         constraints = [
             models.UniqueConstraint(fields=["company", "personnel_code"], name="uniq_personnel_code"),
             models.CheckConstraint(condition=~Q(manager=models.F("id")), name="manager_not_self"),
         ]
+
+
+class EmployeeInvitation(models.Model):
+    STATUS_PENDING = "pending"
+    STATUS_SENT = "sent"
+    STATUS_EXPIRED = "expired"
+    STATUS_REVOKED = "revoked"
+    STATUS_CONSUMED = "consumed"
+    STATUS_CHOICES = [
+        (STATUS_PENDING, "Pending"),
+        (STATUS_SENT, "Sent"),
+        (STATUS_EXPIRED, "Expired"),
+        (STATUS_REVOKED, "Revoked"),
+        (STATUS_CONSUMED, "Consumed"),
+    ]
+
+    PURPOSE_EMPLOYEE_ACTIVATION = "employee_activation"
+
+    employee = models.ForeignKey(
+        EmployeeProfile, on_delete=models.PROTECT, related_name="invitations",
+    )
+    token_hash = models.CharField(max_length=64, unique=True)
+    purpose = models.CharField(
+        max_length=32, default=PURPOSE_EMPLOYEE_ACTIVATION,
+        choices=[(PURPOSE_EMPLOYEE_ACTIVATION, "Employee account activation")],
+    )
+    email = models.EmailField(max_length=254)
+    status = models.CharField(max_length=16, choices=STATUS_CHOICES, default=STATUS_PENDING)
+    expires_at = models.DateTimeField()
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.PROTECT,
+        related_name="created_employee_invitations",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    sent_at = models.DateTimeField(null=True, blank=True)
+    consumed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["employee"],
+                condition=Q(status__in=["pending", "sent"]),
+                name="one_active_employee_invitation",
+            ),
+        ]
+        indexes = [models.Index(fields=["employee", "status"], name="invite_emp_status_idx")]
 
 
 class RoleAssignment(models.Model):

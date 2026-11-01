@@ -276,3 +276,11 @@ class ProductionAuthenticationSettingsTests(TestCase):
         }, clear=True):
             with self.assertRaisesRegex(RuntimeError, "ZSH_SECRET_KEY"):
                 importlib.reload(settings_prod)
+        with patch.dict(os.environ, {
+            "ZSH_SECRET_KEY": "x" * 50,
+            "ZSH_ALLOWED_HOSTS": "example.test",
+            "ZSH_DB_PASSWORD": "safe-test-password",
+            "ZSH_INVITATION_EXPOSE_DEV_LINKS": "1",
+        }, clear=True):
+            with self.assertRaisesRegex(RuntimeError, "cannot be exposed"):
+                importlib.reload(settings_prod)
