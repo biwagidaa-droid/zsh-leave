@@ -249,6 +249,7 @@ class ProductionAuthenticationSettingsTests(TestCase):
         valid_environment = {
             "ZSH_SECRET_KEY": "x" * 50,
             "ZSH_ALLOWED_HOSTS": "example.test",
+            "ZSH_DB_USER": "zsh_app",
             "ZSH_DB_PASSWORD": "safe-test-password",
         }
         with patch.dict(os.environ, valid_environment, clear=True):
@@ -262,6 +263,13 @@ class ProductionAuthenticationSettingsTests(TestCase):
             "django.core.cache.backends.db.DatabaseCache",
         )
         self.assertEqual(settings_prod.CACHES["default"]["LOCATION"], "zsh_cache")
+        with patch.dict(os.environ, {
+            "ZSH_SECRET_KEY": "x" * 50,
+            "ZSH_ALLOWED_HOSTS": "example.test",
+            "ZSH_DB_PASSWORD": "safe-test-password",
+        }, clear=True):
+            with self.assertRaisesRegex(RuntimeError, "ZSH_DB_USER"):
+                importlib.reload(settings_prod)
         with patch.dict(os.environ, {
             "ZSH_SECRET_KEY": "x" * 50,
             "ZSH_DB_PASSWORD": "safe-test-password",

@@ -62,6 +62,13 @@ class RoleAssignmentDataMigrationTests(TransactionTestCase):
 
     def tearDown(self):
         executor = MigrationExecutor(connection)
+        executor.migrate([
+            ("leave", "0013_employeeprofile_account_status_and_more"),
+        ])
+        # Clear only generated rows in this disposable migration-test database.
+        with connection.cursor() as cursor:
+            cursor.execute("DELETE FROM leave_auditevent")
+        executor = MigrationExecutor(connection)
         executor.migrate(executor.loader.graph.leaf_nodes())
         super().tearDown()
 
