@@ -6,7 +6,7 @@
 - در اجرای مرجع این سند Python 3.14 و dependencyهای نصب‌شده و `frontend/node_modules` موجود بودند. PostgreSQL در این اجرای آزمون تأیید نشد.
 - دستورات از ریشه repository آغاز می‌شوند. تنظیمات تست Django عمداً SQLite است؛ آزمون واقعی PostgreSQL نیازمند سرویس PostgreSQL مجزا است.
 - هیچ حساب/seed استاندارد در کد مخزن پیدا نشد. برای آزمون دستی API، کاربر فعال، `EmployeeProfile`، شرکت، مدیر و RoleAssignment باید در دیتابیس disposable توسط مسئول مجاز آماده شوند. از داده واقعی کارمند استفاده نکنید.
-- `.env.example` به‌خودی‌خود توسط Django بارگذاری نمی‌شود. از کپی آن به عنوان secret تولید استفاده نکنید.
+- `.env.example` به‌خودی‌خود توسط Django بارگذاری نمی‌شود. از کپی آن به عنوان secret تولید استفاده نکنید. `config.settings` بر اساس `ZSH_ENV` تنظیمات را انتخاب می‌کند (پیش‌فرض development)؛ برای تست، module را صریح تعیین کنید.
 
 ## ۲. نصب و راه‌اندازی محلی
 
@@ -27,7 +27,7 @@ ZSH_USE_SQLITE=1 DJANGO_SETTINGS_MODULE=config.settings_dev python3 manage.py mi
 ZSH_USE_SQLITE=1 DJANGO_SETTINGS_MODULE=config.settings_dev python3 manage.py runserver
 ```
 
-این فرمان DB `backend/db.sqlite3` را به‌کار می‌برد. برای آزمون، `settings_test.py` دیتابیس تستی SQLite با نام `backend/test.sqlite3` تعیین می‌کند (Django برای test runner معمولاً DB موقت خود را می‌سازد). چون فایل `config/settings.py` وجود ندارد، همیشه settings را صریح تعیین کنید.
+این فرمان DB `backend/db.sqlite3` را به‌کار می‌برد. برای آزمون، `settings_test.py` دیتابیس SQLite با نام `backend/test.sqlite3` را تعیین می‌کند (Django test runner معمولاً DB تست موقت می‌سازد). `config.settings.py` وجود دارد و پیش‌فرض آن development است؛ همیشه برای آزمون settings تست را صریح انتخاب کنید.
 
 برای اجرای رابط، در ترمینال جدا:
 
@@ -36,7 +36,7 @@ cd frontend
 npm run dev
 ```
 
-`frontend/src/api/http.ts` مسیر نسبی `/api/v1` می‌فرستد؛ پیکربندی proxy Vite باید برای اتصال UI به Django تنظیم/تأیید شود. در `vite.config.ts` این اجرای دستی را بررسی کنید؛ در نبود proxy متناسب، Backend را در origin مورد انتظار ارائه کنید.
+`frontend/src/api/http.ts` مسیر نسبی `/api/v1` می‌فرستد و `frontend/vite.config.ts` در حالت توسعه همین مسیر را به `http://127.0.0.1:8000` proxy می‌کند.
 
 ## ۳. فرمان‌های آزمون تأییدشده و نتایج مشاهده‌شده
 
@@ -47,8 +47,7 @@ npm run dev
 | type-check و build عملیاتی Frontend | `cd frontend && npm run build` | **موفق**؛ `tsc --noEmit` + `vite build` |
 | بررسی پیکربندی Django | `cd backend && DJANGO_SETTINGS_MODULE=config.settings_test python3 manage.py check` | **موفق؛ ۰ مشکل** |
 | بررسی اختلاف migration مدل/فایل | `cd backend && DJANGO_SETTINGS_MODULE=config.settings_test python3 manage.py makemigrations --check --dry-run` | **موفق؛ No changes detected** |
-| آزمون خالص unittest با دستور README قدیمی | `cd backend && python3 -m unittest discover -s tests -t .` | **ناموفق: ۱۳۶ اجرا، ۲۴ خطا**؛ از جمله SQLite موجود با schema قدیمی و نبود ستون `site_id` |
-| `python3 manage.py test` بدون cwd/settings | از ریشه | نامعتبر؛ `manage.py` در `backend/` است و `config.settings` موجود نیست |
+| اجرای `python3 manage.py test` از ریشه | از ریشه | نامعتبر چون `manage.py` در `backend/` است؛ `config.settings` وجود دارد و به‌صورت پیش‌فرض development را انتخاب می‌کند، پس در backend نیز برای تست settings را صریح کنید |
 
 برای اجرای تکرارپذیر یک کلاس:
 
@@ -127,7 +126,7 @@ curl -i -b /tmp/zsh-cookies -c /tmp/zsh-cookies \
 | LEAVE-06 لغو و لغو پس از تأیید | درخواست باز مالک؛ درخواست Approved جدا؛ تصمیم‌گیر برای withdrawal | POST `/cancel` روی باز؛ POST `/withdraw` روی Approved؛ سپس تصمیم `/approve_withdraw` یا `/reject_withdraw` | باز→`CANCELLED`; Approved→`WITHDRAWAL_PENDING`; approve withdrawal→`CANCELLED` و برگشت مصرف؛ reject→`APPROVED` | Pass اگر هر اثر دفترکل یک‌بار و اتمیک باشد |
 | LEAVE-07 اصلاح و رقابت اصلاحیه | درخواست Approved، مالک/HR، یک اصلاح فعال | POST `/amend` با `{"start":"<date>","end":"<date>","reason":"<test>"}`؛ اصلاح دوم قبل از تصمیم؛ سپس تصمیم اصلاحیه | اول 201 و رکورد `supersedes`; دوم 409؛ تأیید اصلاح، original=`CANCELLED` و اصلاحیه=`APPROVED`؛ رد اصلاح اصل را حفظ می‌کند | Pass اگر یک اصلاح فعال و ledger بدون دوباره‌شماری بماند؛ fixture را با workflow ببندید |
 | LEAVE-08 comment و attachment | درخواست مجاز غیرمحرمانه؛ فایل ساختگی PDF معتبر و فایل نامعتبر | POST comments `{"body":"یادداشت آزمون"}`؛ POST multipart `file=@<valid.pdf>`؛ GET download؛ سپس MIME/signature ناسازگار و فایل >۱۰ MiB | comment 201 و Event/Audit؛ پیوست 201؛ نامعتبر 400؛ دانلود خصوصی no-store | Pass اگر فقط PDF/PNG/JPEG سازگار پذیرفته شود؛ حذف فایل‌ها فقط در فضای تست |
-| LEDGER-01 اصلاح دستی/CSV | HR دامنه‌دار، entitlement تستی، CSV هدر مطابق UI `personnel_code,type,year,days` | POST `/entitlements/<id>/adjust` با `{"days":"1.0","reason":"<test>"}` و key؛ POST `/entitlements/import/?dry_run=1` سپس `dry_run=0` با `{"csv":"personnel_code,type,year,days\\n<code>,<type>,<year>,<days>"}` | **هدف پذیرش** adjustment: 200، EntitlementEvent + Audit؛ dry-run بدون ledger؛ commit فقط اگر `rejected=0` و هر خط معتبر باشد. **نتیجه فعلی probe:** API adjustment با HR دامنه‌دار و admin برای entitlement معتبر 404 داد؛ فهرست HR 200 بود | Pass فقط پس از برگشت 200 و تطبیق projection/ledger؛ در وضعیت فعلی FAIL/BLOCKED برای adjustment. از شناسه/نوع/داده synthetic استفاده کنید؛ import را جداگانه تست کنید |
+| LEDGER-01 اصلاح دستی/CSV | HR دامنه‌دار یا admin، entitlement تستی، CSV هدر مطابق UI `personnel_code,type,year,days` | POST `/api/v1/entitlements/<id>/adjust` با `{"days":"1.0","reason":"<test>"}` و key؛ POST `/api/v1/entitlements/import/?dry_run=1` سپس `dry_run=0` با `{"csv":"personnel_code,type,year,days\\n<code>,<type>,<year>,<days>"}` | **هدف پذیرش** adjustment: پاسخ موفق، رویداد دفترکل و projection سازگار؛ dry-run بدون ledger؛ commit فقط اگر `rejected=0` و هر خط معتبر باشد. کد view نقش و scope را کنترل و سرویس را فراخوانی می‌کند؛ آزمون مستقیم API این عملیات در suite موجود یافت نشد و این ممیزی آن را اجرا نکرد | Pass فقط پس از تطبیق projection/ledger در محیط disposable؛ نتیجه runtime نامعلوم است. از شناسه/نوع/داده synthetic استفاده کنید؛ import را جداگانه تست کنید |
 | LEDGER-02 reconciliation | entitlement آزمایشی و eventهای مشروع | GET `/api/v1/balances/?year=<year>` و مقایسه جمع event/projection | در تطبیق، balance؛ در ناسازگاری 409؛ تغییر DB در GET ندارد | Pass با تابع reconciliation/آزمون؛ projection را دستی تخریب نکنید |
 | LEDGER-03 چندساله و carry-forward | سیاست سال و سهمیه دو سال مجاور؛ درخواست دو ساله | ثبت از workflow و خواندن entitlements/balances | سهمیه بین سال‌ها بر اساس سهم روزکاری؛ eventهای مربوطه جمعاً برابر روزها | Pass اگر sum برابر درخواست و transfer فقط available باشد؛ این سناریو به setup سرویس نیاز دارد |
 | CONC-01 رزرو هم‌زمان | PostgreSQL disposable جدا از production، کاربر DB مجاز به ساخت test DB، entitlement کافی، دو درخواست و دو اتصال؛ متغیرهای لازم `ZSH_SECRET_KEY` (حداقل ۵۰ نویسه)، `ZSH_ALLOWED_HOSTS` و `ZSH_DB_PASSWORD` و `ZSH_DB_*` فقط به DB آزمون اشاره کنند | از `backend/`: `DJANGO_SETTINGS_MODULE=config.settings_prod python3 manage.py test leave.tests.test_entitlement_ledger.PostgreSQLEntitlementConcurrencyTests.test_parallel_reservations_serialize_without_lost_ledger_entries` | دو event رزرو، بدون lost update | Pass فقط با DB PostgreSQL disposable؛ هرگز settings/credential/DB تولید را به test runner ندهید؛ SQLite نتیجه معتبر نمی‌دهد |
@@ -146,7 +145,14 @@ curl -i -b /tmp/zsh-cookies -c /tmp/zsh-cookies \
 
 ## ۷. Production/PostgreSQL/Integration موارد لازم ولی اجرا‌نشده
 
-1. ساخت DB PostgreSQL خالی و اجرای `DJANGO_SETTINGS_MODULE=<production-compatible-settings> python3 manage.py migrate --check`؛ در مخزن settings production وجود دارد اما entrypoint به `config.settings` ارجاع می‌دهد، بنابراین env باید صریح باشد.
+1. در PostgreSQL disposable، `ZSH_SECRET_KEY` معتبر (حداقل ۵۰ نویسه)، `ZSH_ALLOWED_HOSTS` غیرخالی و همه `ZSH_DB_*` را فقط به همان DB آزمون تنظیم کنید. سپس از `backend/` فرمان‌های زیر را اجرا کنید:
+
+   ```bash
+   ZSH_ENV=production DJANGO_SETTINGS_MODULE=config.settings_prod python3 manage.py migrate --plan
+   ZSH_ENV=production DJANGO_SETTINGS_MODULE=config.settings_prod python3 manage.py migrate
+   ```
+
+   `migrate --check` جای اجرای مهاجرت روی دیتابیس خالی نیست. `config.settings` نیز موجود است و با `ZSH_ENV=production` به settings تولیدی می‌رود؛ module صریح در این مثال برای جلوگیری از ابهام است.
 2. اجرای `PostgreSQLEntitlementConcurrencyTests` با settings جداگانه آزمون؛ از اتصال تولید استفاده نکنید.
 3. backup/restore: repository فرمان/ابزار یا job تأییدشده ندارد؛ پس از تعیین زیرساخت، معیارها در سند ۰۹.
 4. E2E مرورگر، ایمیل، ارسال فایل در object storage، restart، TLS و alerting در این نوبت اجرا نشده‌اند.

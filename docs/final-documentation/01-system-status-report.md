@@ -53,7 +53,7 @@
 
 ## ۵. گردش کار مرخصی و دفترکل
 
-وضعیت‌های اصلی در کد: `PENDING`, `ESCALATED`, `APPROVED`, `REJECTED`, `CANCELLED`, `WITHDRAWAL_PENDING`. درخواست معمول با مدیر به `PENDING` می‌رود؛ بدون مدیر/با پارامتر غیبت مدیر، ارجاع می‌شود؛ HR یا نوع بدون نیاز به تأیید می‌تواند مستقیم تأییدشده ایجاد شود. تصمیم مدیر فقط برای snapshot مدیر، در محدوده همان شرکت و برای نوع غیرمحرمانه است. HR مجاز در scope می‌تواند تصمیم بگیرد. رد و رد لغو نیازمند دلیل است. لغو درخواست باز با `cancel` و درخواست لغو مرخصی تأییدشده با چرخه `withdraw` انجام می‌شود. اصلاحیه فقط برای `APPROVED`، یک اصلاح باز در هر زمان.
+وضعیت‌های اصلی در کد: `PENDING`, `ESCALATED`, `APPROVED`, `REJECTED`, `CANCELLED`, `WITHDRAWAL_PENDING`. درخواست معمول با مدیر به `PENDING` می‌رود؛ بدون مدیر به `ESCALATED` می‌رود. مدل سرویس پارامتر `manager_away` نیز دارد، اما API ثبت فعلی آن را دریافت/ارسال نمی‌کند؛ بنابراین غیبت مدیر از رابط/API فعلی قابل اعلام نیست. HR یا نوع بدون نیاز به تأیید می‌تواند مستقیم تأییدشده ایجاد شود. تصمیم مدیر فقط برای snapshot مدیر، در محدوده همان شرکت و برای نوع غیرمحرمانه است. HR مجاز در scope می‌تواند تصمیم بگیرد. رد و رد لغو نیازمند دلیل است. لغو درخواست باز با `cancel` و درخواست لغو مرخصی تأییدشده با چرخه `withdraw` انجام می‌شود. اصلاحیه فقط برای `APPROVED`، یک اصلاح باز در هر زمان.
 
 ثبت، تصمیم و تغییر سهمیه در تراکنش و با قفل ردیف پیاده‌سازی شده‌اند؛ `Idempotency-Key` از تکرار عملیات جلوگیری می‌کند. محاسبه روز کاری از `WorkPattern`، تعطیلات و نسخه مؤثر سیاست می‌آید؛ نبود تنظیم معتبر به خطای بسته منتهی می‌شود.
 
@@ -78,9 +78,9 @@
 | `listRequests`, `getRequest`, `createRequest`, `updateRequest` | GET/POST `/leave-requests/`, GET/PATCH `/leave-requests/{id}/` | موجود؛ scope شخصی/تیم/HR؛ شناسه نامجاز 404 |
 | `actRequest` | POST `/leave-requests/{id}/{action}` | موجود؛ actionهای `approve`, `reject`, `cancel`, `withdraw`, `approve_withdraw`, `reject_withdraw`, `hr_cancel`, `amend`؛ `amend` همچنین route اختصاصی دارد |
 | `listComments`, `addComment` | GET/POST `/leave-requests/{id}/comments/` | موجود؛ محرمانه فقط HR؛ comment append-only |
-| `listAttachments`, `addAttachment` | GET/POST `/leave-requests/{id}/attachments/` | موجود؛ ۱–۱۰ MiB، PDF/PNG/JPEG و امضای محتوایی؛ دانلود از لینک همان پاسخ |
+| `listAttachments`, `addAttachment` | GET/POST `/leave-requests/{id}/attachments/` | موجود؛ فایل غیرخالی تا ۱۰ MiB، PDF/PNG/JPEG و امضای محتوایی؛ دانلود از لینک همان پاسخ |
 | `balances` | GET `/balances/?year=…&employee=…` | موجود؛ کارمند/مدیر/HR محدود به queryset خود؛ admin با شناسه صریح می‌تواند مانده فردی ببیند؛ exec بدون EmployeeProfile دسترسی کاربردی ندارد |
-| `entitlements`, `adjustEntitlement` | GET `/entitlements/?year=…`, POST `/entitlements/{id}/adjust` | فهرست موجود؛ adjustment در view تعریف شده اما در probe ایزوله برای HR دامنه‌دار و admin، روی entitlement معتبر 404 داد؛ عملیات اصلاح سهمیه تا رفع/آزمون مجدد قابل اتکا نیست |
+| `entitlements`, `adjustEntitlement` | GET `/entitlements/?year=…`, POST `/entitlements/{id}/adjust` | فهرست و مسیر اصلاح در کد وجود دارد؛ view نقش HR/admin را می‌پذیرد، دامنه کارمند را کنترل و سرویس دفترکل را فراخوانی می‌کند. آزمون مستقیم API این عملیات در suite موجود یافت نشد؛ موفقیت انتهابه‌انتها در این ممیزی ادعا نمی‌شود |
 | `importEntitlements` | POST `/entitlements/import/?dry_run=0|1` | موجود؛ CSV؛ dry-run؛ commit فقط در صورت صفر سطر ردشده |
 | `recordAbsence` | POST `/hr/absences/` | موجود؛ HR دامنه‌دار؛ ثبت و تأیید در عملیات تراکنشی |
 | `calendar` | GET `/calendar/events/?from=…&to=…&scope=me|team|org` | موجود؛ دامنه‌های شخصی/مدیر/HR؛ برچسب خنثی برای درخواست‌های همکار |
@@ -125,8 +125,7 @@ Router و منو در `frontend/src/App.tsx` و `components/Layout.tsx` کنتر
 - `cd frontend && npm test`: **۳۴ موفق، صفر ناموفق**.
 - `cd frontend && npm run build`: **موفق**؛ `tsc --noEmit` و Vite build.
 - `cd backend && DJANGO_SETTINGS_MODULE=config.settings_test python3 manage.py test`: **۱۷۶ مورد اجرا، ۱۷۳ موفق و ۳ skipped**؛ SQLite هشدار پشتیبانی‌نکردن constraint دارای `nulls_distinct`.
-- `cd backend && python3 -m unittest discover -s tests -t .`: **ناموفق: ۱۳۶ آزمون، ۲۴ خطا**؛ بین علت‌های مشاهده‌شده، اجرای مجموعه Django با دیتابیس SQLite موجود/قدیمی است که ستون `site_id` ندارد. برای آزمون کامل Django از Test runner با `settings_test` استفاده شود.
-- اجرای `python3 manage.py test` از ریشه نامعتبر است؛ `manage.py` داخل `backend/` است. `manage.py` پیش‌فرض `config.settings` را تنظیم می‌کند، اما چنین ماژول settings در مخزن نیست؛ باید `DJANGO_SETTINGS_MODULE` صریح باشد.
+- اجرای `python3 manage.py test` از ریشه نامعتبر است چون `manage.py` در `backend/` قرار دارد. ماژول `config.settings` وجود دارد و بر اساس `ZSH_ENV` تنظیمات dev/test/prod را انتخاب می‌کند؛ مقدار پیش‌فرض آن development است. برای جلوگیری از اجرای ناخواسته با تنظیمات توسعه، فرمان آزمون باید settings تست را صریح کند.
 - PostgreSQL-specific concurrency/trigger tests در SQLite رد شده‌اند؛ این اجرا PostgreSQL را تأیید نمی‌کند.
 
 شواهد، شکاف‌ها و آزمون‌های پیشنهادی در [سند ۰۲](02-complete-testing-manual.md) ثبت شده‌اند.
@@ -136,13 +135,13 @@ Router و منو در `frontend/src/App.tsx` و `components/Layout.tsx` کنتر
 1. **ساعتی:** فرانت‌اند منطق فرم دارد، API پایه امکان/پذیرش ندارد و policy hardcoded disabled است.
 2. **مدیریت نقش:** endpoint وجود دارد ولی UI/Api client متناسب نیست؛ اعطای دسترسی از UI انجام‌پذیر نیست.
 3. **Job/اعلان بیرونی:** jobs خالی، email provider/ارسال ایمیل و scheduler وجود ندارد؛ مسیرهای auto-cancel و notify نباید به‌عنوان خودکار فعال فرض شوند.
-4. **تنظیمات اجرای توسعه:** `settings_dev` از `ZSH_USE_SQLITE` برای override استفاده می‌کند، درحالی‌که `.env.example` `ZSH_DB_ENGINE` دارد؛ سازگاری عملیاتی تضمین نشده است.
-5. **پیکربندی entrypoint:** `manage.py`, `asgi.py`, `wsgi.py` به `config.settings` پیش‌فرض اشاره می‌کنند؛ این فایل وجود ندارد.
+4. **انتخاب settings:** `config.settings` بر اساس `ZSH_ENV` ماژول dev/test/prod را انتخاب می‌کند و پیش‌فرض آن development است؛ فرایندهای production باید صریحاً `ZSH_ENV=production` داشته باشند. `.env.example` خودکار بارگذاری نمی‌شود.
+5. **استقرار:** `manage.py`, `asgi.py`, `wsgi.py` از `config.settings` استفاده می‌کنند؛ این wrapper وجود دارد، اما manifest استقرار، تنظیم process واقعی و اجرای production در مخزن/این ممیزی تأیید نشده است.
 6. **اعتماد به SQLite:** برخی قیدها/triggerهای DB و تضمین هم‌زمانی PostgreSQL در SQLite بازنمایی نمی‌شوند.
 7. **بهره‌برداری:** فقدان فایل deploy، migration rollout، backup/restore، لاگ متمرکز، monitoring و runbook مستند در repository.
 8. **راهکارهای ناقص UI/API:** تخصیص نقش، سیاست/WorkPattern کامل، export، فرایند کاربر جدید و reset رمز به‌عنوان UI قابل استفاده پیدا نشد.
 9. **ناهمخوانی نقش/تراز:** UI تراز برای `exec` route دارد ولی API به EmployeeProfile نیازمند است و برای exec بدون پروفایل خطا می‌دهد؛ در مقابل admin در API تراز/entitlement فردی را می‌خواند/اصلاح می‌کند، با وجود نبود آن صفحه در UI. سیاست مورد انتظار باید از مالک داده تأیید شود.
-10. **اصلاح دستی سهمیه:** درخواست معتبر به endpoint adjustment برای هر دو HR دامنه‌دار و admin در DB تستی disposable، 404 برگشت؛ `entitlements` list برای HR همان fixture 200 بود. این بررسی مستقل، آزمون رسمی suite نیست و مسیر اصلاح را تا رفع و آزمون مجدد مسدود می‌کند.
+10. **پوشش اصلاح سهمیه:** view اصلاح سهمیه در کد HR و admin را می‌پذیرد و entitlement را با scope مجاز کنترل می‌کند؛ در آزمون‌های موجود، آزمون مستقیم API این مسیر یافت نشد. اجرای اصلاح دستی در این ممیزی انجام نشده و نتیجه موفق/ناموفق آن نامعلوم است؛ سناریوی API در سند ۰۲ باید در محیط disposable اجرا شود.
 
 ## ۱۰. ارزیابی آمادگی تولید
 

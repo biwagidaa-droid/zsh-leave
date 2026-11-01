@@ -4,7 +4,7 @@
 
 ## ورود و مشاهده گزارش
 
-پس از تخصیص فعال HR/مدیر سامانه، وارد شوید. route فرانت‌اند `/reports` برای `hr` و `exec` و route `/balances` برای `exec` قابل مشاهده است. صفحه گزارش از انواع گزارش API استفاده می‌کند. صفحه `/balances` برای Executive به‌طور قطعی قابل استفاده نیست: API برای خواندن balance به EmployeeProfile نیاز دارد و `exec` به‌تنهایی در employee queryset دامنه ندارد؛ تا اصلاح/تصمیم مجوز، روی آن برای گزارش Executive حساب نکنید:
+پس از تخصیص فعال نقش `exec` توسط مدیر سامانه، وارد شوید. route فرانت‌اند `/reports` برای `hr` و `exec` و route `/balances` برای `exec` قابل مشاهده است. صفحه گزارش از انواع گزارش API استفاده می‌کند. صفحه `/balances` برای دارنده نقش Executive که EmployeeProfile ندارد قابل استفاده نیست: API برای خواندن balance به EmployeeProfile نیاز دارد و نقش `exec` به‌تنهایی employee queryset را گسترش نمی‌دهد؛ بنابراین روی آن برای گزارش تجمیعی Executive حساب نکنید:
 
 - `absences`: شمار رخدادهای درخواست‌های Approved به تفکیک برچسب نوع؛
 - `balances`: شمار کارمندان دارای entitlement (گزارش توازن تجمیعی، نه فهرست تکی)؛

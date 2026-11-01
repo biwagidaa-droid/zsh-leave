@@ -19,7 +19,7 @@
 | LED-01 | projection ledger با sum(delta) برای همه entitlementها برابر؛ گزارش reconciliation بدون مورد؛ repair فقط با event جبرانی ممیزی‌شده | منطق/آزمون SQLite وجود دارد؛ reconciliation سراسری/فرمان عملیاتی وجود ندارد |
 | LED-02 | update/delete مستقیم EntitlementEvent توسط DB رد؛ trigger migration روی PostgreSQL مشاهده و آزموده شود | model append-only و migrations trigger دارد؛ ۳ آزمون PostgreSQL در این اجرا skip شدند |
 | LED-03 | دو رزرو موازی و دو approve موازی بدون lost update/دو posting در PostgreSQL تکرارپذیر | آزمون PostgreSQL نوشته شده؛ در محیط فعلی اجرا/تأیید نشده |
-| LED-04 | import/adjustment و درخواست چندساله همه‌یا‌هیچ، idempotent و reason/audit قابل گزارش | سرویس/فرم موجود؛ API adjustment روی entitlement معتبر برای HR/admin در probe disposable 404 داد؛ import API و مسیر PostgreSQL باید جداگانه بازآزمایی شود |
+| LED-04 | import/adjustment و درخواست چندساله همه‌یا‌هیچ، idempotent و reason/audit قابل گزارش | سرویس و endpointها در کد موجودند؛ آزمون مستقیم API اصلاح/ورود گروهی و اجرای PostgreSQL در این ممیزی انجام نشده؛ با fixture disposable و تطبیق ledger/projection بازآزمایی شود |
 | TEST-01 | دستور canonical backend `DJANGO_SETTINGS_MODULE=config.settings_test python3 manage.py test` سبز و گزارش نسخه/تعداد artifact شود | اجرا شد: ۱۷۶ مورد؛ ۱۷۳ موفق و ۳ skipped؛ SQLite هشدار قید `nulls_distinct` |
 | TEST-02 | frontend `npm test` سبز؛ unit/E2E مرورگر، accessibility، مسیرهای role و خطای server نیز پوشش داده شوند | اجرا شد: ۳۴ موفق؛ E2E/مرورگر اجرا نشده |
 | TEST-03 | `npm run build` خروجی تکرارپذیر و artifact deployment ثبت شود | در این اجرا موفق |
@@ -27,9 +27,9 @@
 | TEST-05 | آزمون integration سازمانی شامل SMTP، storage، proxy و DB واقعی موفق | مسدود: service integration در مخزن/محیط تعریف نشده |
 | UI-01 | UI هیچ قابلیت غیرفعال/ناسازگار نشان ندهد؛ ساعتی فقط پس از قرارداد server و persist واقعی فعال شود | blocker ثبت‌شده: فرم hourly موجود ولی policy false و API فیلدها را نمی‌پذیرد |
 | UI-02 | هر endpoint client با method/path واقعی، status/schema و role خود contract test شود | بخشی در `test_frontend_api` موجود؛ جدول API سند ۰۱ موارد بدون wrapper را مشخص می‌کند |
-| CFG-01 | `DJANGO_SETTINGS_MODULE`/WSGI/ASGI برای deploy واقعی resolved؛ `config.settings` مبهم حذف/تعریف و smoke test انجام شود | blocker: ماژول پیش‌فرض `config.settings` در repository وجود ندارد |
+| CFG-01 | `DJANGO_SETTINGS_MODULE`/WSGI/ASGI برای deploy واقعی resolved؛ process حتماً production settings را انتخاب کند و smoke test انجام شود | wrapper `config.settings` وجود دارد و با `ZSH_ENV` ماژول انتخاب می‌کند؛ مقدار پیش‌فرض development است. process واقعی production و smoke test deployment هنوز تأیید نشده |
 | CFG-02 | تنظیمات dev هرگز در production؛ DEBUG false، allowed hosts دقیق، CSRF origins دقیق، secret rotation runbook | كد production checks دارد؛ process/rotation نامشخص |
-| CFG-03 | تنظیمات DB مستند و با `.env.example` هماهنگ؛ اتصال اشتباه fail-fast | نیازمند تصمیم/اصلاحات آینده؛ `ZSH_DB_ENGINE` در مثال در مقابل `ZSH_USE_SQLITE` در dev |
+| CFG-03 | تنظیمات DB مستند و با `.env.example` هماهنگ؛ اتصال اشتباه fail-fast | `ZSH_DB_ENGINE` در settings پایه و `.env.example` مصرف می‌شود؛ `ZSH_USE_SQLITE=1` override اضافی توسعه است. dotenv خودکار بارگذاری نمی‌شود و مقادیر عملیاتی باید در محیط process تعریف شوند |
 | DEP-01 | manifest deploy، pinned runtime/dependency، static/media persistence، health probes و rollout/rollback تأییدشده | مسدود: Docker/Compose/CI/CD/deploy manifest یافت نشد |
 | DEP-02 | TLS، DNS، reverse proxy header، timeout/body limit و static/media route در staging آزموده | مسدود تا زیرساخت مشخص شود |
 | OPS-01 | `pg_dump` رمزگذاری‌شده، retention/immutability، فایل پیوست همراه DB؛ زمان آخرین backup و alert قابل مشاهده | انجام‌نشده: ابزار/job/سیاست repo ندارد |
@@ -40,7 +40,7 @@
 | BIZ-01 | HR/Legal تأیید انواع، تقویم، سال entitlement، accrual، carry-forward، قواعد گذشته‌نگر و محرمانگی | مسدود به تصمیم سازمان؛ schema تنها implementation است نه تأیید حقوقی |
 | BIZ-02 | HR و مدیران آموزش دیده، role mapping/کارمند اولیه و provisioning/reset credential مستند شده | مسدود: کاربر جدید password unusable؛ UI invitation/reset ندارد |
 | BIZ-03 | Owner برای role assignment API-only، گزارش، export، site configuration و پشتیبانی تعیین شود | نیازمند تصمیم/مسئول؛ صفحه UI نقش وجود ندارد |
-| DOC-01 | مستندهای Persian با نسخه release بازبینی، لینک‌ها/routeها/دستورات اعتبارسنجی و owner مشخص | این بسته تولید شده؛ route/فرمان‌های مستند با کد و آزمون مقایسه شده‌اند، review مالک محصول نیاز است |
+| DOC-01 | مستندهای Persian با نسخه release بازبینی، لینک‌ها/routeها/دستورات اعتبارسنجی و owner مشخص | در این ممیزی لینک‌های داخلی و فرمان‌های منتخب بررسی و چند ادعای ناسازگار اصلاح شد؛ sign-off مالک محصول و نگاشت نسخه انتشار هنوز لازم است |
 | UAT-01 | کارمند، مدیر، HR، مدیر سامانه و Executive سناریوهای پذیرش با داده مصنوعی امضا کنند | انجام‌نشده؛ این گزارش UAT نیست |
 | SIGN-01 | امنیت، DB، HR/Legal، عملیات، مالک محصول و business owner امضای release با تاریخ/نسخه داشته باشند | انجام‌نشده؛ امضاکننده/تصمیم‌گیر باید مشخص شود |
 
@@ -56,4 +56,4 @@
 ۴. منبع هویت، provisioning برای حساب‌های `unusable_password` و فرایند reset چیست؟
 ۵. سازمان برای backup، نگهداری فایل پزشکی، retention و restore چه RPO/RTO و کلیدگذاری می‌خواهد؟
 ۶. نقش‌های Executive باید کدام گزارش‌های تجمیعی را ببیند و چه حداقل اندازه گروهی اعمال شود؟
-۷. چگونه تنظیمات واقعی `config.settings`/WSGI/ASGI و pipeline انتشار ارائه خواهد شد؟
+۷. چه کسی مالک تنظیم `ZSH_ENV=production`, WSGI/ASGI, secrets و pipeline انتشار خواهد بود؟

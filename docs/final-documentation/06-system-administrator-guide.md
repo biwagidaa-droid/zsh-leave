@@ -8,7 +8,7 @@
 
 | متغیر | کاربرد |
 |---|---|
-| `ZSH_ENV` | در `.env.example` درج است؛ settings پایه آن را برای انتخاب module مصرف نمی‌کند |
+| `ZSH_ENV` | در `config/settings.py` برای انتخاب module dev/test/prod استفاده می‌شود؛ پیش‌فرض `development` است |
 | `ZSH_DEBUG` | settings پایه DEBUG؛ `settings_dev` آن را روی True بازنویسی می‌کند |
 | `ZSH_SECRET_KEY` | کلید Django؛ production لازم و حداقل ۵۰ نویسه |
 | `ZSH_ALLOWED_HOSTS` | فهرست comma-separated؛ production غیرخالی لازم |
@@ -18,7 +18,7 @@
 
 نمونه `.env.example` شامل مقدارهای صرفاً توسعه است و Django dotenv loader در مخزن دیده نشد. `settings_prod.py` PostgreSQL را اجباری می‌کند و password DB می‌خواهد. کلیدها را در مستند، Git یا log قرار ندهید.
 
-**هشدار entrypoint:** فایل `config/settings.py` وجود ندارد، اما `manage.py`, `wsgi.py`, `asgi.py` آن را default می‌کنند. برای commandها `DJANGO_SETTINGS_MODULE` را صریح مشخص کنید:
+`config/settings.py` یک wrapper واقعی است که `ZSH_ENV` را به `settings_dev`, `settings_test` یا `settings_prod` نگاشت می‌کند؛ مقدار ناشناخته نیز به development می‌افتد. برای فرمان‌های عملیاتی settings را صریح تعیین کنید تا تصادفاً development انتخاب نشود:
 
 ```bash
 cd backend
@@ -26,7 +26,7 @@ ZSH_USE_SQLITE=1 DJANGO_SETTINGS_MODULE=config.settings_dev python3 manage.py mi
 DJANGO_SETTINGS_MODULE=config.settings_test python3 manage.py test
 ```
 
-برای production، `DJANGO_SETTINGS_MODULE=config.settings_prod` لازم است؛ پیش از سرویس‌دهی، deployment/runner واقعی و secret management باید جداگانه تنظیم شود. هیچ `createsuperadmin` یا `seed_demo` command در repository یافت نشد.
+برای production می‌توان `ZSH_ENV=production` را به wrapper داد یا `DJANGO_SETTINGS_MODULE=config.settings_prod` را مستقیم تعیین کرد. `.env.example` خودکار بارگذاری نمی‌شود. خود deployment/runner و secret management باید جداگانه فراهم و در محیط هدف آزموده شوند. هیچ `createsuperadmin` یا `seed_demo` command در repository یافت نشد.
 
 ## مدیریت کاربر، نقش و سازمان
 
@@ -55,13 +55,20 @@ DJANGO_SETTINGS_MODULE=config.settings_test python3 manage.py test
 
 | مشکل | بررسی |
 |---|---|
-| `ModuleNotFoundError: config.settings` | `DJANGO_SETTINGS_MODULE` را برای فرمان تعیین کنید؛ برای dev/test از moduleهای واقعی استفاده کنید |
+| برنامه با تنظیمات development اجرا شده است | `ZSH_ENV` را در محیط همان process روی `production` بگذارید یا `DJANGO_SETTINGS_MODULE=config.settings_prod` را صریح تعیین کنید؛ `config.settings` در نبود `ZSH_ENV` به development برمی‌گردد |
 | شکست ستون یا schema SQLite | دیتابیس disposable بسازید و migration/test runner صحیح اجرا کنید؛ schema را دستی patch نکنید |
 | API 403/404 | نقش، scope RoleAssignment، EmployeeProfile، شرکت و manager snapshot را بررسی کنید |
 | 409 سهمیه | دفترکل و projection را از طریق سرویس/reconciliation مجاز بررسی؛ Event را مستقیم اصلاح نکنید |
 | نشست/CSRF | cookie jar، `X-CSRFToken`, HTTPS و same-site/proxy را بررسی کنید |
-| upload ناموفق | فایل ۱–۱۰ MiB، پسوند/Content-Type/signature را تطبیق دهید و دسترسی `MEDIA_ROOT` را بررسی کنید |
+| upload ناموفق | فایل غیرخالی و حداکثر ۱۰ MiB باشد؛ پسوند/Content-Type/signature را تطبیق دهید و دسترسی `MEDIA_ROOT` را بررسی کنید |
 
 ## استقرار و عملیات بازیابی
 
-Docker/Compose، CI/CD، reverse proxy، scheduler، worker و فرآیند restore عملی در مخزن وجود ندارد. `gunicorn` در dependency است، اما command/manifest عملیاتی تثبیت نشده است. پیش از deploy، تکلیف `config.settings`, TLS و database، media persistence، health probes، migration sequencing، backup/restore و incident owner را تعیین کنید. سند [۰۹](09-production-readiness-checklist.md) gateهای پذیرش را فهرست می‌کند.
+Docker/Compose، CI/CD، reverse proxy، scheduler، worker و فرآیند restore عملی در مخزن وجود ندارد. `gunicorn` در dependency است. نمونه فرمان اجرای WSGI با فرض آماده‌بودن environment و DB:
+
+```bash
+cd backend
+ZSH_ENV=production gunicorn config.wsgi:application --bind 0.0.0.0:8000
+```
+
+این نمونه جایگزین تنظیم TLS/reverse proxy، secret manager، media persistence، migration sequencing، backup/restore، health probes یا تأیید استقرار نیست. پیش از deploy، مسئول هر مورد و روش آزمون آن را تعیین کنید. سند [۰۹](09-production-readiness-checklist.md) gateهای پذیرش را فهرست می‌کند.
