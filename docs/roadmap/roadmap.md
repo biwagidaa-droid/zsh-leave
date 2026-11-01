@@ -42,17 +42,17 @@ Status legend: Not Started, In Progress, Blocked, Completed, Needs Review.
 
 ## Phase 06 – Calendar, Holidays, and Leave Policies
 - Goal: Provide one trustworthy calendar conversion and business-day foundation for operational leave workflows.
-- Status: In Progress (date-conversion endpoint only)
-- Completed in this increment: stateless Jalali/Gregorian conversion API with input validation and boundary tests.
-- Remaining: authenticated organization-scoped calendar APIs, effective-dated work patterns, holiday management API/history, versioned leave policies, and production calendar UI integration.
-- Dependencies: Phase 03 identity, permissions, and organization scope; operational Phase 04/05 services.
+- Status: In Progress (partial; not production-ready)
+- Completed in this increment: authenticated calendar/holiday/day-estimate APIs; effective-dated Work Pattern and immutable Policy models/services; holiday audit history; daily leave submission uses backend workday calculation and policy snapshot; calendar UI reads event/holiday APIs in HTTP mode.
+- Remaining: HR RBAC and organization-scoped management, management UI for policy/work patterns/range holidays, backend hourly calculations, configurable leave-year/rollover/expiry, PostgreSQL and end-to-end verification.
+- Dependencies: approved organization roles and HR policy decisions; actual company/site work schedules and official holiday sources.
 
 ## Phase 07 – Jobs, Scheduler, and Notifications
 - Goal: Deliver idempotent background execution and persistent notifications.
 - Status: Blocked
-- Dependencies: operational Phase 03 permissions, Phase 04 workflow and ledger services, and approved reminder/escalation/retention policies.
+- Dependencies: Phase 06 acceptance, operational Phase 03 permissions, Phase 04 workflow and ledger services, and approved reminder/escalation/retention policies.
 
 ## Phase 08 – HR Operations and Analytics
 - Goal: Deliver secure HR operations, employee records, imports, attachments, and analytics.
 - Status: Blocked
-- Dependencies: operational Phase 03 permissions and organization scope, Phase 04/05 APIs, and approved HR, data-retention, and sensitive-document policies.
+- Dependencies: Phase 06/07 acceptance, operational Phase 03 permissions and organization scope, Phase 04/05 APIs, and approved HR, data-retention, and sensitive-document policies.

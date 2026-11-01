@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { api } from "../api";
+import { api, DEMO_MODE } from "../api";
 import type { CalendarEvent } from "../api/types";
 import { Button, Card, DataTable, Empty, ErrorState, LoadingBlock, Meter, PageHeader, Tabs, type Column } from "../components/ui";
 import {
@@ -20,7 +20,8 @@ function eventTime(e: CalendarEvent): string {
 }
 
 function initialScope(roles: Parameters<typeof hasAny>[0]): Scope {
-  if (hasAny(roles, "hr", "exec")) return "org";
+  if (DEMO_MODE && hasAny(roles, "hr", "exec")) return "org";
+  if (hasAny(roles, "admin")) return "org";
   if (hasAny(roles, "manager")) return "team";
   return "me";
 }
@@ -35,7 +36,8 @@ export function CalendarPage() {
   const from = gToIso(toGregorian(view.jy, view.jm, 1));
   const to = gToIso(toGregorian(view.jy, view.jm, ml));
   const { data, error, loading, reload } = useAsync(() => api.calendar(from, to, scope), [from, to, scope]);
-  const { data: holidays } = useAsync(() => api.holidays().catch(() => []), []);
+  const { data: holidays, error: holidaysError, loading: holidaysLoading, reload: reloadHolidays } =
+    useAsync(() => api.calendarHolidays(from, to), [from, to]);
   const pad = saturdayIndex(from);
   const today = todayIso();
 
@@ -47,8 +49,8 @@ export function CalendarPage() {
   }, [pad, ml, view]);
 
   const eventsByDay = (iso: string): CalendarEvent[] => (data ?? []).filter((e) => e.start <= iso && e.end >= iso);
-  const holidaysOn = (jd: number) =>
-    (holidays ?? []).filter((h) => h.jalaliMonth === view.jm && h.jalaliDay === jd && (h.jalaliYear == null || h.jalaliYear === view.jy));
+  const holidaysOn = (iso: string) =>
+    (holidays ?? []).filter((holiday) => holiday.start <= iso && holiday.end >= iso);
 
   const go = (delta: number) => {
     const next = shiftJalaliMonth(view, delta);
@@ -58,8 +60,12 @@ export function CalendarPage() {
 
   const tabs: { id: Scope; label: string }[] = [
     { id: "me", label: "شخصی" },
-    ...(hasAny(roles, "manager", "hr", "exec") ? [{ id: "team" as const, label: "تیم" }] : []),
-    ...(hasAny(roles, "hr", "exec") ? [{ id: "org" as const, label: "سازمان" }] : []),
+    ...(DEMO_MODE
+      ? (hasAny(roles, "manager", "hr", "exec") ? [{ id: "team" as const, label: "تیم" }] : [])
+      : (hasAny(roles, "manager") ? [{ id: "team" as const, label: "تیم" }] : [])),
+    ...((DEMO_MODE && hasAny(roles, "hr", "exec")) || hasAny(roles, "admin")
+      ? [{ id: "org" as const, label: "سازمان" }]
+      : []),
   ];
   // اگر نقش کاربر دامنه‌ی انتخاب‌شده را مجاز نمی‌داند، به «شخصی» برگرد
   const activeScope: Scope = tabs.some((t) => t.id === scope) ? scope : "me";
@@ -79,8 +85,9 @@ export function CalendarPage() {
         )}
       />
       {error && <ErrorState message={error} onRetry={() => void reload()} />}
+      {holidaysError && <ErrorState message={holidaysError} onRetry={() => void reloadHolidays()} />}
       <Tabs value={activeScope} onChange={(v) => setScope(v as Scope)} items={tabs} label="دامنه تقویم" />
-      {loading && !data ? <LoadingBlock /> : null}
+      {(loading && !data) || (holidaysLoading && !holidays) ? <LoadingBlock /> : null}
       <div className="cal-grid" aria-busy={loading}>
         {WEEKDAY_NAMES.map((w) => (
           <div key={w} className="cal-head">
@@ -91,15 +98,15 @@ export function CalendarPage() {
         {cells.map((c, i) => {
           if (!c.jd) return <div key={i} className="cal-cell off" aria-hidden="true" />;
           const evs = eventsByDay(c.iso);
-          const hol = holidaysOn(c.jd);
+          const hol = holidaysOn(c.iso);
           const friday = (i % 7) === 6;
           const cls = ["cal-cell", friday ? "weekend" : "", hol.length ? "holiday" : "", c.iso === today ? "today" : ""].filter(Boolean).join(" ");
-          const label = `${c.jd} ${MONTH_NAMES[view.jm - 1]}${hol.length ? `، تعطیل: ${hol.map((h) => h.label).join("، ")}` : ""}${evs.length ? `، ${evs.length} غیبت` : ""}`;
+          const label = `${c.jd} ${MONTH_NAMES[view.jm - 1]}${hol.length ? `، تعطیل: ${hol.map((h) => h.title).join("، ")}` : ""}${evs.length ? `، ${evs.length} غیبت` : ""}`;
           return (
             <div key={i} className={cls} aria-current={c.iso === today ? "date" : undefined}>
               <span className="cal-num" aria-hidden="true">{c.jd}</span>
               <span className="sr-only">{label}</span>
-              {hol.map((h) => <span key={h.id} className="chip holiday" title={h.label}>{h.label}</span>)}
+              {hol.map((h) => <span key={h.id} className="chip holiday" title={h.title}>{h.title}</span>)}
               {evs.slice(0, MAX_CHIPS).map((e) => (
                 <Link
                   key={`${e.id}-${e.employeeId}`}

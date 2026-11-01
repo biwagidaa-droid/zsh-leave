@@ -135,8 +135,18 @@ export function RequestNewPage() {
     if (hourly || !estimated || !start || !end || start > end) return;
     let alive = true;
     api.estimate(employeeId, start, end)
-      .then((e) => { if (alive) setDays(e.days.toFixed(1)); })
-      .catch(() => { /* تخمین ناموفق: کاربر می‌تواند دستی وارد کند */ });
+      .then((e) => {
+        if (alive) {
+          setDays(Number(e.days).toFixed(1));
+          setFormError("");
+        }
+      })
+      .catch((err) => {
+        if (alive) {
+          setEstimated(false);
+          setFormError(`محاسبه روزهای کاری انجام نشد: ${errorMessage(err)}`);
+        }
+      });
     return () => { alive = false; };
   }, [hourly, estimated, start, end, employeeId]);
 
@@ -145,7 +155,7 @@ export function RequestNewPage() {
     setFormError("");
     try {
       const e = await api.estimate(employeeId, start, end);
-      setDays(e.days.toFixed(1));
+      setDays(Number(e.days).toFixed(1));
       setEstimated(true);
       setErrors((x) => ({ ...x, workingDays: "" }));
     } catch (err) {
@@ -207,8 +217,8 @@ export function RequestNewPage() {
       if (hourly) {
         // روز کاری بودن تاریخ (الگوی قرارداد + تعطیلات) از همان تخمین Backend گرفته می‌شود
         const holidayToday = holidayIsosForRange(holidayRows ?? [], start, start).includes(start);
-        const est = await api.estimate(employeeId, start, start).catch(() => null);
-        if (est && est.days === 0 && !(holidayToday && policy?.hourlyAllowOnHoliday)) {
+        const est = await api.estimate(employeeId, start, start);
+        if (Number(est.days) === 0 && !(holidayToday && policy?.hourlyAllowOnHoliday)) {
           setErrors({ start: "این تاریخ طبق الگوی کاری شما روز کاری نیست" });
           focusFirstInvalid(formRef.current);
           return;
@@ -307,7 +317,7 @@ export function RequestNewPage() {
               label="روز کاری"
               required
               error={errors.workingDays}
-              hint={noWorkingDays ? "در این بازه روز کاری وجود ندارد؛ بازه را بررسی کنید." : "برچسب تخمین؛ Backend مقدار تأییدشده را بازمحاسبه نمی‌کند"}
+              hint={noWorkingDays ? "در این بازه روز کاری وجود ندارد؛ بازه را بررسی کنید." : "Backend هنگام ثبت، مقدار را دوباره با تقویم و سیاست مؤثر محاسبه می‌کند"}
             >
               <div className="toolbar">
                 <Input
@@ -631,7 +641,7 @@ export function HrAbsencePage() {
     if (!estimated || employeeId === "" || !start || !end || start > end) return;
     let alive = true;
     api.estimate(Number(employeeId), start, end)
-      .then((e) => { if (alive) setDays(e.days.toFixed(1)); })
+      .then((e) => { if (alive) setDays(Number(e.days).toFixed(1)); })
       .catch(() => { /* دستی وارد شود */ });
     return () => { alive = false; };
   }, [estimated, employeeId, start, end]);
@@ -641,7 +651,7 @@ export function HrAbsencePage() {
     setFormError("");
     try {
       const e = await api.estimate(employeeId === "" ? null : Number(employeeId), start, end);
-      setDays(e.days.toFixed(1));
+      setDays(Number(e.days).toFixed(1));
       setEstimated(true);
     } catch (err) {
       setFormError(errorMessage(err));

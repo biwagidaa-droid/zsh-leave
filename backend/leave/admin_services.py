@@ -45,18 +45,22 @@ def _entry_of(h: PublicHoliday) -> H.HolidayEntry:
 
 def _snapshot(h: PublicHoliday) -> dict:
     return {"scope": h.scope, "year": h.jalali_year, "month": h.jalali_month,
-            "day": h.jalali_day, "label": h.label}
+            "day": h.jalali_day, "label": h.label, "is_active": h.is_active}
 
 
 @transaction.atomic
 def add_holiday(*, user, scope: str, label: str, jalali_text: str, recurring: bool) -> PublicHoliday:
     entry = H.make_entry_from_text(scope, label, jalali_text, recurring)      # خطای قالب/تاریخ
-    existing = [_entry_of(h) for h in PublicHoliday.objects.select_for_update().filter(scope=entry.scope)]
-    years = {entry.jalali_year} if entry.jalali_year else {1403, 1404, 1405, 1406}
+    existing = [_entry_of(h) for h in PublicHoliday.objects.select_for_update().filter(
+        scope=entry.scope, is_active=True,
+    )]
+    years = {entry.jalali_year} if entry.jalali_year else {
+        1403, *(holiday.jalali_year for holiday in existing if holiday.jalali_year is not None),
+    }
     H.check_duplicates(existing + [entry], years)
     h = PublicHoliday.objects.create(scope=entry.scope, jalali_year=entry.jalali_year,
                                      jalali_month=entry.jalali_month, jalali_day=entry.jalali_day,
-                                     label=entry.label, created_by=user)
+                                     label=entry.label, created_by=user, updated_by=user)
     PublicHolidayHistory.objects.create(holiday_id=h.pk, action="create", before=None,
                                         after=_snapshot(h), actor=user)
     AuditEvent.objects.create(actor=user, origin="admin", action="holiday.create",
@@ -65,16 +69,57 @@ def add_holiday(*, user, scope: str, label: str, jalali_text: str, recurring: bo
 
 
 @transaction.atomic
+def update_holiday(*, user, holiday_id: int, scope: str, label: str,
+                   jalali_text: str, recurring: bool, reason: str) -> PublicHoliday:
+    if not (reason or "").strip():
+        raise H.HolidayError("درج دلیل ویرایش الزامی است")
+    holiday = PublicHoliday.objects.select_for_update().get(pk=holiday_id)
+    if not holiday.is_active:
+        raise H.HolidayError("تعطیلی غیرفعال قابل ویرایش نیست")
+    entry = H.make_entry_from_text(scope, label, jalali_text, recurring)
+    existing = [_entry_of(item) for item in PublicHoliday.objects.select_for_update().filter(
+        scope=entry.scope, is_active=True,
+    ).exclude(pk=holiday.pk)]
+    years = {entry.jalali_year} if entry.jalali_year else {
+        1403, *(item.jalali_year for item in existing if item.jalali_year is not None),
+    }
+    H.check_duplicates(existing + [entry], years)
+    before = _snapshot(holiday)
+    holiday.scope = entry.scope
+    holiday.jalali_year = entry.jalali_year
+    holiday.jalali_month = entry.jalali_month
+    holiday.jalali_day = entry.jalali_day
+    holiday.label = entry.label
+    holiday.updated_by = user
+    holiday.save()
+    after = _snapshot(holiday)
+    PublicHolidayHistory.objects.create(
+        holiday_id=holiday.pk, action="update", before=before, after=after, actor=user,
+    )
+    AuditEvent.objects.create(
+        actor=user, origin="admin", action="holiday.update", entity="PublicHoliday",
+        entity_id=str(holiday.pk), before=before, after=after, reason=reason,
+    )
+    return holiday
+
+
+@transaction.atomic
 def delete_holiday(*, user, holiday_id: int, reason: str) -> None:
     if not (reason or "").strip():
         raise H.HolidayError("درج دلیل حذف الزامی است")
     h = PublicHoliday.objects.select_for_update().get(pk=holiday_id)
     snap = _snapshot(h)
-    PublicHolidayHistory.objects.create(holiday_id=h.pk, action="delete", before=snap, after=None, actor=user)
-    AuditEvent.objects.create(actor=user, origin="admin", action="holiday.delete",
+    PublicHolidayHistory.objects.create(
+        holiday_id=h.pk, action="deactivate", before=snap, after={**snap, "is_active": False}, actor=user,
+    )
+    AuditEvent.objects.create(actor=user, origin="admin", action="holiday.deactivate",
                               entity="PublicHoliday", entity_id=str(h.pk), before=snap, reason=reason)
-    h.delete()
+    h.is_active = False
+    h.updated_by = user
+    h.save(update_fields=["is_active", "updated_by", "updated_at"])
 
 
 def entries_for(scopes) -> list[H.HolidayEntry]:
-    return [_entry_of(h) for h in PublicHoliday.objects.filter(scope__in=list(scopes) + ["*"])]
+    return [_entry_of(h) for h in PublicHoliday.objects.filter(
+        scope__in=list(scopes) + ["*"], is_active=True,
+    )]

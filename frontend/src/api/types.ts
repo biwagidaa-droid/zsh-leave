@@ -123,6 +123,15 @@ export type CalendarEvent = {
   endTime?: string;
 };
 
+export type CalendarHolidayEvent = {
+  id: number | string;
+  title: string;
+  start: string;
+  end: string;
+  scope: string;
+  kind: string;
+};
+
 export type Holiday = {
   id: number;
   scope: string;

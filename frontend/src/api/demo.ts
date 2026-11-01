@@ -5,14 +5,14 @@ import { clientPolicyFromSettings } from "../lib/clientPolicy";
 import {
   findDailyConflict, findHourlyConflict, minutesBetween, validateHourlyDraft, workingDaysFromMinutes,
 } from "../lib/hourlyLeave";
-import { jalaliNow, todayIso, toGregorian, gToIso, addDaysIso } from "../lib/jalali";
+import { jalaliNow, todayIso, toGregorian, fromGregorian, isoToG, gToIso, addDaysIso } from "../lib/jalali";
 import { KIND_CATEGORY, inferKind, type NotifKind } from "../lib/notificationPrefs";
 import { estimateWorkingDays } from "../lib/workdays";
 import type { Role } from "../lib/roles";
 import { ApiError } from "./errors";
 import type { Api, LeaveDraft, RequestFilters } from "./contract";
 import type {
-  Attachment, AuditRow, Balance, BradfordNote, CalendarEvent, Comment, Company, ContractPeriod,
+  Attachment, AuditRow, Balance, BradfordNote, CalendarEvent, CalendarHolidayEvent, Comment, Company, ContractPeriod,
   CoverageRow, Department, Employee, Entitlement, Holiday, ImportPreview, JobRow,
   LeaveRequest, LeaveType, NotificationItem, SettingItem, User,
 } from "./types";
@@ -633,6 +633,27 @@ export const demoApi: Api = {
       } satisfies CalendarEvent;
     });
   },
+  async calendarHolidays(from, to) {
+    current();
+    const result: CalendarHolidayEvent[] = [];
+    for (let iso = from; iso <= to; iso = addDaysIso(iso, 1)) {
+      const { jy, jm, jd } = fromGregorian(isoToG(iso));
+      for (const holiday of db.holidays) {
+        if (holiday.jalaliMonth === jm && holiday.jalaliDay === jd &&
+            (holiday.jalaliYear == null || holiday.jalaliYear === jy)) {
+          result.push({
+            id: `legacy-${holiday.id}-${iso}`,
+            title: holiday.label,
+            start: iso,
+            end: iso,
+            scope: holiday.scope,
+            kind: "official",
+          });
+        }
+      }
+    }
+    return result;
+  },
   async holidays() { current(); return db.holidays; },
   async saveHoliday(h) {
     const u = current();
@@ -650,11 +671,11 @@ export const demoApi: Api = {
     save();
     return row;
   },
-  async deleteHoliday(id) {
+  async deleteHoliday(id, reason) {
     const u = current();
     if (!has(u, "hr", "admin")) fail(404, "یافت نشد", "not_found");
     db.holidays = db.holidays.filter((h) => h.id !== id);
-    audit("holiday_delete", "PublicHoliday", String(id));
+    audit("holiday_deactivate", "PublicHoliday", String(id), reason);
     save();
   },
   async notifications() {

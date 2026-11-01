@@ -15,6 +15,18 @@ class Company(models.Model):
     is_active = models.BooleanField(default=True)
 
 
+class OrganizationSite(models.Model):
+    company = models.ForeignKey(Company, on_delete=models.PROTECT, related_name="sites")
+    code = models.CharField(max_length=32)
+    name = models.CharField(max_length=200)
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["company", "code"], name="uniq_site_code_in_company"),
+        ]
+
+
 class Department(models.Model):
     company = models.ForeignKey(Company, on_delete=models.PROTECT)
     parent = models.ForeignKey("self", null=True, blank=True, on_delete=models.PROTECT)
@@ -28,6 +40,7 @@ class Department(models.Model):
 class EmployeeProfile(models.Model):
     user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.PROTECT)
     company = models.ForeignKey(Company, on_delete=models.PROTECT)
+    site = models.ForeignKey(OrganizationSite, null=True, blank=True, on_delete=models.PROTECT)
     department = models.ForeignKey(Department, null=True, blank=True, on_delete=models.PROTECT)
     personnel_code = models.CharField(max_length=32)
     manager = models.ForeignKey("self", null=True, blank=True, on_delete=models.SET_NULL,
@@ -41,6 +54,190 @@ class EmployeeProfile(models.Model):
             models.UniqueConstraint(fields=["company", "personnel_code"], name="uniq_personnel_code"),
             models.CheckConstraint(condition=~Q(manager=models.F("id")), name="manager_not_self"),
         ]
+
+
+class WorkPattern(models.Model):
+    name = models.CharField(max_length=120)
+    company = models.ForeignKey(Company, on_delete=models.PROTECT, related_name="work_patterns")
+    site = models.ForeignKey(OrganizationSite, null=True, blank=True, on_delete=models.PROTECT)
+    department = models.ForeignKey(Department, null=True, blank=True, on_delete=models.PROTECT)
+    employee = models.ForeignKey(EmployeeProfile, null=True, blank=True, on_delete=models.PROTECT)
+    working_weekdays = models.JSONField()
+    start_time = models.TimeField()
+    end_time = models.TimeField()
+    break_minutes = models.PositiveSmallIntegerField(default=0)
+    effective_from = models.DateField()
+    effective_to = models.DateField(null=True, blank=True)
+    shift_kind = models.CharField(max_length=16, default="fixed")
+    is_active = models.BooleanField(default=True)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, on_delete=models.PROTECT,
+                                   related_name="+")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["company", "effective_from", "effective_to"]),
+            models.Index(fields=["site", "effective_from", "effective_to"]),
+            models.Index(fields=["department", "effective_from", "effective_to"]),
+            models.Index(fields=["employee", "effective_from", "effective_to"]),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                condition=Q(effective_to__isnull=True) | Q(effective_from__lte=models.F("effective_to")),
+                name="work_pattern_valid_dates",
+            ),
+            models.CheckConstraint(condition=Q(shift_kind="fixed"), name="fixed_work_pattern_only"),
+        ]
+
+    def clean(self):
+        from django.core.exceptions import ValidationError
+
+        selectors = [self.site_id, self.department_id, self.employee_id]
+        if sum(value is not None for value in selectors) > 1:
+            raise ValidationError("الگوی کاری باید دقیقاً یک دامنه اختصاصی داشته باشد")
+        if self.site_id and self.site.company_id != self.company_id:
+            raise ValidationError({"site": "سایت باید متعلق به همان شرکت باشد"})
+        if self.department_id and self.department.company_id != self.company_id:
+            raise ValidationError({"department": "دپارتمان باید متعلق به همان شرکت باشد"})
+        if self.employee_id and self.employee.company_id != self.company_id:
+            raise ValidationError({"employee": "کارمند باید متعلق به همان شرکت باشد"})
+        weekdays = self.working_weekdays
+        if (not isinstance(weekdays, list) or not weekdays or
+                any(isinstance(day, bool) or not isinstance(day, int) or not 0 <= day <= 6
+                    for day in weekdays) or len(set(weekdays)) != len(weekdays)):
+            raise ValidationError({"working_weekdays": "روزهای هفته باید فهرست یکتای اعداد ۰ تا ۶ باشد"})
+        if self.start_time is None or self.end_time is None:
+            raise ValidationError({"start_time": "ساعت شروع و پایان الزامی است"})
+        if self.start_time >= self.end_time:
+            raise ValidationError({"end_time": "ساعت پایان باید پس از شروع باشد"})
+        duration = ((self.end_time.hour * 60 + self.end_time.minute) -
+                    (self.start_time.hour * 60 + self.start_time.minute))
+        if self.break_minutes >= duration:
+            raise ValidationError({"break_minutes": "مدت استراحت باید کمتر از ساعات حضور باشد"})
+
+    @property
+    def daily_work_minutes(self) -> int:
+        start = self.start_time.hour * 60 + self.start_time.minute
+        end = self.end_time.hour * 60 + self.end_time.minute
+        return end - start - self.break_minutes
+
+    @property
+    def weekly_work_minutes(self) -> int:
+        return self.daily_work_minutes * len(self.working_weekdays)
+
+
+class LeavePolicyVersion(models.Model):
+    SCOPE_CHOICES = [
+        ("organization", "organization"),
+        ("company", "company"),
+        ("site", "site"),
+        ("department", "department"),
+        ("employee", "employee"),
+    ]
+
+    scope = models.CharField(max_length=16, choices=SCOPE_CHOICES)
+    company = models.ForeignKey(Company, null=True, blank=True, on_delete=models.PROTECT)
+    site = models.ForeignKey(OrganizationSite, null=True, blank=True, on_delete=models.PROTECT)
+    department = models.ForeignKey(Department, null=True, blank=True, on_delete=models.PROTECT)
+    employee = models.ForeignKey(EmployeeProfile, null=True, blank=True, on_delete=models.PROTECT)
+    version = models.PositiveIntegerField()
+    effective_from = models.DateField()
+    values = models.JSONField()
+    reason = models.TextField()
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, on_delete=models.PROTECT,
+                                   related_name="+")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["scope", "effective_from"]),
+            models.Index(fields=["company", "effective_from"]),
+            models.Index(fields=["site", "effective_from"]),
+            models.Index(fields=["department", "effective_from"]),
+            models.Index(fields=["employee", "effective_from"]),
+        ]
+
+    def clean(self):
+        from django.core.exceptions import ValidationError
+
+        expected = {
+            "organization": (False, False, False, False),
+            "company": (True, False, False, False),
+            "site": (True, True, False, False),
+            "department": (True, False, True, False),
+            "employee": (True, False, False, True),
+        }.get(self.scope)
+        actual = (self.company_id is not None, self.site_id is not None,
+                  self.department_id is not None, self.employee_id is not None)
+        if expected is None or actual != expected:
+            raise ValidationError("دامنه سیاست و محدوده سازمانی آن سازگار نیست")
+        if self.site_id and self.site.company_id != self.company_id:
+            raise ValidationError({"site": "سایت باید متعلق به همان شرکت باشد"})
+        if self.department_id and self.department.company_id != self.company_id:
+            raise ValidationError({"department": "دپارتمان باید متعلق به همان شرکت باشد"})
+        if self.employee_id and self.employee.company_id != self.company_id:
+            raise ValidationError({"employee": "کارمند باید متعلق به همان شرکت باشد"})
+        if not self.reason.strip():
+            raise ValidationError({"reason": "دلیل ثبت نسخه سیاست الزامی است"})
+
+    def save(self, *args, **kwargs):
+        if self.pk is not None:
+            raise PermissionError("نسخه سیاست تغییرناپذیر است؛ نسخه جدید ثبت کنید")
+        super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise PermissionError("نسخه سیاست قابل حذف نیست")
+
+
+class CalendarHoliday(models.Model):
+    SCOPE_CHOICES = [
+        ("national", "national"),
+        ("organization", "organization"),
+        ("company", "company"),
+        ("site", "site"),
+    ]
+
+    title = models.CharField(max_length=200)
+    start_date = models.DateField()
+    end_date = models.DateField()
+    scope = models.CharField(max_length=16, choices=SCOPE_CHOICES)
+    company = models.ForeignKey(Company, null=True, blank=True, on_delete=models.PROTECT)
+    site = models.ForeignKey(OrganizationSite, null=True, blank=True, on_delete=models.PROTECT)
+    holiday_kind = models.CharField(max_length=32, default="official")
+    description = models.TextField(blank=True)
+    source = models.CharField(max_length=120, blank=True)
+    is_active = models.BooleanField(default=True)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, on_delete=models.PROTECT,
+                                   related_name="+")
+    updated_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, on_delete=models.PROTECT,
+                                   related_name="+")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["start_date", "end_date", "is_active"]),
+            models.Index(fields=["scope", "company", "site"]),
+        ]
+        constraints = [
+            models.CheckConstraint(condition=Q(start_date__lte=models.F("end_date")),
+                                   name="calendar_holiday_valid_dates"),
+        ]
+
+    def clean(self):
+        from django.core.exceptions import ValidationError
+
+        expected = {
+            "national": (False, False),
+            "organization": (False, False),
+            "company": (True, False),
+            "site": (True, True),
+        }.get(self.scope)
+        actual = (self.company_id is not None, self.site_id is not None)
+        if expected is None or actual != expected:
+            raise ValidationError("دامنه تعطیلی و محدوده سازمانی آن سازگار نیست")
+        if self.site_id and self.site.company_id != self.company_id:
+            raise ValidationError({"site": "سایت باید متعلق به همان شرکت باشد"})
 
 
 class LeaveType(models.Model):
@@ -94,6 +291,8 @@ class LeaveRequest(models.Model):
     manager_snapshot = models.ForeignKey(EmployeeProfile, null=True, blank=True,
                                          on_delete=models.PROTECT, related_name="+")
     leave_type = models.ForeignKey(LeaveType, on_delete=models.PROTECT)
+    policy_version = models.ForeignKey(LeavePolicyVersion, null=True, blank=True,
+                                       on_delete=models.PROTECT, related_name="leave_requests")
     start_date = models.DateField()
     end_date = models.DateField()
     working_days = models.DecimalField(max_digits=5, decimal_places=1)
@@ -144,6 +343,15 @@ class _AppendOnly(models.Model):
         raise PermissionError("رکورد حسابرسی/تاریخچه قابل حذف نیست")
 
 
+class CalendarHolidayHistory(_AppendOnly):
+    holiday_id = models.BigIntegerField()
+    action = models.CharField(max_length=16)
+    before = models.JSONField(null=True)
+    after = models.JSONField(null=True)
+    actor = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, on_delete=models.PROTECT)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+
 class LeaveRequestEvent(_AppendOnly):
     request = models.ForeignKey(LeaveRequest, on_delete=models.PROTECT, related_name="events")
     actor = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, on_delete=models.PROTECT)
@@ -183,9 +391,13 @@ class PublicHoliday(models.Model):
     jalali_month = models.PositiveSmallIntegerField()
     jalali_day = models.PositiveSmallIntegerField()
     label = models.CharField(max_length=200)
+    is_active = models.BooleanField(default=True)
     created_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, on_delete=models.PROTECT,
                                    related_name="+")
+    updated_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, on_delete=models.PROTECT,
+                                   related_name="+")
     created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         constraints = [

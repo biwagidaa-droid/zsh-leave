@@ -54,19 +54,40 @@ This contract reflects the current state of the actual backend and frontend inte
 - Invalid calendar/date: HTTP 400 with `code` and `message_fa`
 - Jalali dates outside the supported conversion range are rejected; they are not silently approximated.
 
+### Phase 06 operational calendar APIs
+
+All data-bearing endpoints require the configured authenticated session. Management APIs are currently restricted to Django superusers; this is a temporary least-privilege boundary, not the final HR/organization RBAC model.
+
+| Method | Endpoint | Contract |
+|---|---|---|
+| GET | `/api/v1/calendar/events/?from=YYYY-MM-DD&to=YYYY-MM-DD&scope=me\|team\|org` | Calendar events; team is limited to direct reports in the same company; organization scope is superuser-only. |
+| GET | `/api/v1/calendar/holidays/?from=YYYY-MM-DD&to=YYYY-MM-DD` | Active range holidays applicable to the authenticated employee's national, organization, company, and site scopes. |
+| GET | `/api/v1/working-days/estimate?employee={id}&start=YYYY-MM-DD&end=YYYY-MM-DD` | Backend day-count estimate; an employee can query only their own profile unless superuser. |
+| GET/POST | `/api/v1/calendar/work-patterns/` | Read effective patterns for own profile; create a validated pattern as superuser. |
+| GET/POST | `/api/v1/calendar/policies/` | Read effective policy for own profile (optional `date`); create immutable policy version as superuser. |
+| GET/POST | `/api/v1/calendar/holidays/manage/` | List or create range-based holidays; superuser-only. |
+| PATCH/DELETE | `/api/v1/calendar/holidays/manage/{id}/` | Edit or logically deactivate; deactivation requires a reason and writes history/audit. |
+| GET | `/api/v1/calendar/holidays/manage/{id}/history/` | Holiday history; superuser-only. |
+| GET | `/api/v1/admin/calendar/work-patterns/` | Work-pattern history; superuser-only. |
+| GET | `/api/v1/admin/calendar/policies/` | Policy-version history; superuser-only. |
+
+Dates in these contracts are Gregorian ISO dates. Jalali entry/display belongs to the presentation layer; backend remains authoritative for validation and workday calculations. Workday and policy configuration is required: missing configuration returns a conflict rather than silently using a guessed default.
+
+The legacy `/api/v1/holidays/` API remains available for one-day Jalali `PublicHoliday` entries and uses the same superuser-only write boundary. Its DELETE operation is logical deactivation and requires a reason.
+
 ### Schema endpoints
 - `GET /api/v1/schema/` — Implemented via drf-spectacular
 - `GET /api/v1/docs/` — Implemented via Swagger UI
 
 ## 4. Planned but Unimplemented
-- leave request list/create/update/actions
-- entitlement endpoints
-- holiday management endpoints
-- organization calendar, work-pattern, and timeline endpoints
-- versioned leave-policy endpoints
+- HR role and company/site/department scoped permission management
+- Frontend management screens for range holidays, work patterns, and policy versions
+- backend-authoritative hourly leave calculations tied to work patterns and holidays
+- leave-year configuration, rollover, expiry, and their ledger operations
+- full employee/HR workflow endpoints
 - report generation endpoints
 - admin setting endpoints
-- auth session and permission endpoints
+- authentication/session lifecycle APIs
 
 ## 5. Notes
 - Pagination, filtering, and idempotency are not yet enforced at the general API layer because the higher-level business endpoints are not yet implemented.

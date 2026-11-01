@@ -22,9 +22,11 @@ API واقعی برای Job Status/History/Retry/Trigger/Health یا Notificatio
 
 ## و) تست‌ها
 
-- Backend regression suite: ۱۱۰ Passed، ۰ Failed، ۰ Skipped؛ این تست‌ها قابلیت‌های Job/Notification را پوشش نمی‌دهند.
+- Backend regression suite: ۱۲۴ Passed، ۰ Failed، ۰ Skipped؛ این تست‌ها قابلیت‌های Job/Notification را پوشش نمی‌دهند.
 - Frontend suite: ۳۲ Passed، ۰ Failed، ۰ Skipped؛ تست‌های منطق رابط/Demo هستند و تحویل backend را اثبات نمی‌کنند.
-- تست اختصاصی فاز ۷: Passed ۰، Failed ۰، Skipped ۰، Not Run همه.
+- تست اختصاصی فاز ۷: Passed ۰، Failed ۰؛ این فاز شروع نشده است.
+
+فاز ۷ در این اجرا عمداً آغاز نشد، چون دروازه پذیرش فاز ۶ هنوز برقرار نیست.
 
 ## ز) موارد باقی‌مانده
 
@@ -36,4 +38,3 @@ API واقعی برای Job Status/History/Retry/Trigger/Health یا Notificatio
 ## ح) وضعیت پذیرش
 
 تمام معیارهای پذیرش فاز ۷ **BLOCKED / NOT TESTED** هستند؛ اجرای دوباره، ارسال اعلان، Jobهای حساس و کنترل دسترسی backend در این مرحله برقرار یا اثبات نشده‌اند.
-

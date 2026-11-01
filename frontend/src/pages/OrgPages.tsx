@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useRef, useState } from "react";
-import { api } from "../api";
+import { api, DEMO_MODE } from "../api";
 import { asApiError, errorMessage } from "../api/errors";
 import type { Company, ContractPeriod, Department, Employee, Holiday } from "../api/types";
 import { JalaliDateField } from "../components/JalaliDateField";
@@ -222,7 +222,9 @@ export function OrganizationPage() {
 
 export function HolidaysPage() {
   const { user } = useAuth();
-  const canManage = hasAny(user?.roles ?? [], "hr", "admin");
+  const canManage = DEMO_MODE
+    ? hasAny(user?.roles ?? [], "hr", "admin")
+    : hasAny(user?.roles ?? [], "admin");
   const toast = useToast();
   const formRef = useRef<HTMLFormElement>(null);
   const { data, reload, error, loading } = useAsync(() => api.holidays(), []);
@@ -235,6 +237,8 @@ export function HolidaysPage() {
   const [busy, setBusy] = useState(false);
   const [toDelete, setToDelete] = useState<Holiday | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [deleteReason, setDeleteReason] = useState("");
+  const [deleteError, setDeleteError] = useState("");
 
   const sorted = [...(data ?? [])].sort((a, b) => a.jalaliMonth - b.jalaliMonth || a.jalaliDay - b.jalaliDay || (a.jalaliYear ?? 0) - (b.jalaliYear ?? 0));
 
@@ -273,11 +277,17 @@ export function HolidaysPage() {
 
   const confirmDelete = async () => {
     if (!toDelete) return;
+    if (!deleteReason.trim()) {
+      setDeleteError("دلیل غیرفعال‌سازی الزامی است");
+      return;
+    }
     setDeleting(true);
     try {
-      await api.deleteHoliday(toDelete.id);
-      toast("حذف شد", "success");
+      await api.deleteHoliday(toDelete.id, deleteReason.trim());
+      toast("غیرفعال شد", "success");
       setToDelete(null);
+      setDeleteReason("");
+      setDeleteError("");
       await reload();
     } catch (err) {
       toast(errorMessage(err), "danger");
@@ -293,7 +303,7 @@ export function HolidaysPage() {
     {
       key: "actions", label: "عملیات",
       render: (h) => (canManage
-        ? <Button variant="danger" size="sm" onClick={() => setToDelete(h)}>حذف</Button>
+        ? <Button variant="danger" size="sm" onClick={() => { setToDelete(h); setDeleteReason(""); setDeleteError(""); }}>غیرفعال‌سازی</Button>
         : "—"),
     },
   ];
@@ -331,9 +341,16 @@ export function HolidaysPage() {
       </div>
       {toDelete && (
         <ConfirmDialog
-          title="حذف تعطیلی"
-          message={<>تعطیلی «{toDelete.label}» حذف شود؟</>}
-          confirmLabel="حذف"
+          title="غیرفعال‌سازی تعطیلی"
+          message={(
+            <>
+              <p>تعطیلی «{toDelete.label}» غیرفعال می‌شود؛ سابقه آن حفظ خواهد شد.</p>
+              <Field label="دلیل" required error={deleteError}>
+                <Input value={deleteReason} onChange={(event) => { setDeleteReason(event.target.value); setDeleteError(""); }} />
+              </Field>
+            </>
+          )}
+          confirmLabel="غیرفعال‌سازی"
           danger
           busy={deleting}
           onConfirm={() => void confirmDelete()}

@@ -1,6 +1,6 @@
 import type { ClientPolicy } from "../lib/clientPolicy";
 import type {
-  Attachment, AuditRow, Balance, BradfordNote, CalendarEvent, Comment, Company, ContractPeriod,
+  Attachment, AuditRow, Balance, BradfordNote, CalendarEvent, CalendarHolidayEvent, Comment, Company, ContractPeriod,
   CoverageRow, Department, Employee, Entitlement, Holiday, ImportPreview, JobRow,
   LeaveRequest, LeaveType, NotificationItem, Page, ReportSummary, SettingItem, User,
 } from "./types";
@@ -49,9 +49,10 @@ export interface Api {
   importEntitlements(csv: string, dryRun: boolean): Promise<ImportPreview>;
   recordAbsence(d: LeaveDraft): Promise<LeaveRequest>;
   calendar(from: string, to: string, scope: "me" | "team" | "org"): Promise<CalendarEvent[]>;
+  calendarHolidays(from: string, to: string): Promise<CalendarHolidayEvent[]>;
   holidays(): Promise<Holiday[]>;
   saveHoliday(h: Omit<Holiday, "id"> & { id?: number }): Promise<Holiday>;
-  deleteHoliday(id: number): Promise<void>;
+  deleteHoliday(id: number, reason: string): Promise<void>;
   notifications(): Promise<NotificationItem[]>;
   readNotification(id: number): Promise<void>;
   employees(q?: string): Promise<Employee[]>;
@@ -69,7 +70,12 @@ export interface Api {
   jobs(): Promise<JobRow[]>;
   audit(): Promise<AuditRow[]>;
   health(): Promise<{ live: boolean; ready: boolean; db: string; lastJob: string }>;
-  estimate(employeeId: number | null, start: string, end: string): Promise<{ days: number; estimated: true }>;
+  estimate(employeeId: number | null, start: string, end: string): Promise<{
+    days: number | string;
+    estimated: boolean;
+    policyVersionId?: number;
+    workPatternIds?: number[];
+  }>;
   clientPolicy(): Promise<ClientPolicy>;
   bradfordNotes(): Promise<BradfordNote[]>;
   saveBradfordNote(employeeId: number, body: string): Promise<BradfordNote>;

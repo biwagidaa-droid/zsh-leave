@@ -1,45 +1,39 @@
-# Final Delivery Report
+# گزارش نهایی تحویل — ادامه فازهای ۶ تا ۸
 
-## Executive Summary
-The project has reached a stable phase-0 through phase-2 backend baseline without rewriting the existing domain logic or frontend. The core leave engine under `backend/zsh_core` remains intact, while the Django runtime foundation was hardened and documented. The work did not implement operational authentication or the full leave workflow because those are explicitly out of scope for this mission.
+## وضعیت کلی
 
-## Phase 00 – Audit and Stabilization
-The repository was reviewed as a mixed project: a Python/Django backend with domain logic and a React/Vite frontend. The audit identified that the main domain engine was already present but the runtime foundation lacked environment isolation, migration tracking, and public API endpoints. The missing `openpyxl` dependency was also blocking the export/import test suite.
+اجرای فعلی از Working Tree بازیابی‌شده ادامه یافت و تغییرات موجود حذف یا reset نشد. فاز ۶ به‌صورت **PARTIAL** توسعه و تست شد؛ چون معیارهای Production آن هنوز کامل نیستند، فازهای ۷ و ۸ مطابق شرط ورودی کاربر شروع نشدند. هیچ commit، push، reset یا عملیات مخرب دیتابیس انجام نشده است.
 
-## Phase 01 – Architecture and Policy Definition
-The architecture was documented around the current code structure rather than imposing a new system. The organization and database model was defined as an extensible multi-company hierarchy, and the future-phase access-control model was kept separate from the current runtime scope.
+## فاز ۶
 
-## Phase 02 – Backend and Database Foundation
-The project now includes environment-aware settings, a production-ready Postgres configuration with SQLite fallback, initial migration state for the leave domain, and a simple JSON-based health and readiness API. Structured logging and environment separation are in place.
+- مدل‌ها، سرویس مرکزی محاسبه روز کاری، نسخه‌بندی تغییرناپذیر Policy، تعطیلات بازه‌ای/تاریخچه و APIهای calendar، holidays، Work Pattern و Policy افزوده شدند.
+- ثبت مرخصی روزانه از محاسبه Backend استفاده می‌کند و نسخه Policy را بر اساس تاریخ شروع درخواست ثبت می‌کند.
+- Frontend تقویم و تعطیلات را در HTTP mode به API وصل می‌کند؛ UI مدیریت Work Pattern/Policy/تعطیلی بازه‌ای کامل نیست.
+- Migrationها: `0002_calendarholidayhistory_leavepolicyversion_and_more.py` و `0003_publicholiday_is_active_publicholiday_updated_at_and_more.py`.
+- جزئیات معیارها، APIها، تصمیمات سازمانی و موارد باقی‌مانده در [گزارش فاز ۶](./phase-06-report.md) آمده است.
+- نتیجه معیار ورود به فاز ۷: **BLOCKED**.
 
-## Risks Remaining
-- Operational authentication and authorization remain unimplemented and are intentionally deferred.
-- Many business policy decisions still require HR or leadership approval.
-- The full leave workflow, reporting, and organizational expansion remain future work.
+## فازهای ۷ و ۸
 
-## Git State
-- Branch: `main`
-- Working tree: no user-created modifications were present during the audit window.
-- Snapshot: the project was validated against the working baseline and no destructive actions were taken.
+- فاز ۷: **BLOCKED / NOT STARTED**؛ زیرساخت Job، Scheduler، تاریخچه اجرا و Notification backend ایجاد نشده است.
+- فاز ۸: **BLOCKED / NOT STARTED**؛ عملیات HR، اسناد امن، ورود گروهی و داشبورد عملیاتی ایجاد نشده‌اند.
+- گزارش مستقل وضعیت: [فاز ۷](./phase-07-report.md) و [فاز ۸](./phase-08-report.md).
 
-## Next Required Pre-requisites for Phase 03
-- approved role and permission matrix
-- real user identity and session configuration
-- operational HR and manager mapping data
-- organization hierarchy expansion plan with effective dating
-- production environment variables and Postgres service deployment
+## اعتبارسنجی اجراشده
 
-## Phase 06–08 Continuation Audit (2026-11-01)
+- Django system check با تنظیم تست: موفق.
+- `makemigrations --check --dry-run` با تنظیم تست: `No changes detected`.
+- کل Django test suite با SQLite: **124 تست موفق، 0 ناموفق**.
+- Frontend TypeScript/Vite build: موفق.
+- Frontend test suite: **32 تست موفق، 0 ناموفق**.
+- SQLite هشدار می‌دهد که قید قدیمی `nulls_distinct` را enforce نمی‌کند. PostgreSQL در محیط اجرا در دسترس نبود؛ آزمون Migration/constraint روی PostgreSQL و E2E مرورگر انجام نشده‌اند.
 
-### Actual state
-- Phase 03–05 remain operationally incomplete: backend authentication/organization-scope enforcement and business APIs are absent. Existing domain functions and frontend Demo behavior do not establish production workflows.
-- Phase 06 is partial. `GET /api/v1/calendar/convert-date/` now performs stateless Jalali/Gregorian conversion with validation. Organization calendars, work patterns, versioned policies, and production UI integration remain incomplete.
-- Phase 07 is blocked: no persistent job runner, job history, notification backend, or related APIs.
-- Phase 08 is blocked: no operational HR APIs for absences, contracts, imports, attachments, employee profiles, or analytics.
+## محدودیت‌ها و تصمیم‌های لازم
 
-### Verification
-- Backend: 110 tests passed; Django system check and migration-state check passed.
-- Frontend: 32 tests passed; TypeScript check and Vite production build passed.
-- No migration or database data was changed. No commit or push was made.
+- تعیین نقش/مجوز HR، مدیران و دسترسی چندشرکتی در Backend؛ مدیریت فعلی endpointهای جدید به superuser محدود است.
+- تصویب الگوی کاری، شیفت، تعطیلات رسمی و سازمانی، سال مرخصی، منطقه زمانی، انتقال و انقضای مانده.
+- اتصال محاسبات ساعتی به Work Pattern و تعطیلات در Backend.
+- تکمیل UI مدیریت Policy، Work Pattern و تعطیلات بازه‌ای.
+- اجرای تست روی PostgreSQL و آزمون E2E پس از تکمیل APIهای سازمانی.
 
-See [phase-06-report.md](./phase-06-report.md), [phase-07-report.md](./phase-07-report.md), and [phase-08-report.md](./phase-08-report.md) for phase criteria, test scope, and blockers. The three phases are not represented as complete or production-ready.
+این تحویل **به معنی تکمیل فازهای ۶ تا ۸ یا آمادگی Production نیست**. جزئیات بازیابی اولیه در [گزارش بازیابی](./phase-06-recovery-report.md) ثبت شده است.

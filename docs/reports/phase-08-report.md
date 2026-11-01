@@ -22,9 +22,11 @@ APIهای HR/Analytics در backend پیاده نشده‌اند؛ به همین
 
 ## و) تست‌ها
 
-- Backend regression suite: ۱۱۰ Passed، ۰ Failed، ۰ Skipped؛ تست مختص فاز ۸ ندارد.
+- Backend regression suite: ۱۲۴ Passed، ۰ Failed، ۰ Skipped؛ تست مختص فاز ۸ ندارد.
 - Frontend suite: ۳۲ Passed، ۰ Failed، ۰ Skipped؛ اعتبار محاسبات واقعی DB/API را اثبات نمی‌کند.
-- تست اختصاصی فاز ۸: Passed ۰، Failed ۰، Skipped ۰، Not Run همه.
+- تست اختصاصی فاز ۸: Passed ۰، Failed ۰؛ این فاز شروع نشده است.
+
+فاز ۸ در این اجرا عمداً آغاز نشد، چون فازهای ۶ و ۷ پیش‌نیازهای آن را برآورده نکرده‌اند.
 
 ## ز) موارد باقی‌مانده
 
@@ -37,4 +39,3 @@ APIهای HR/Analytics در backend پیاده نشده‌اند؛ به همین
 ## ح) وضعیت پذیرش
 
 تمام معیارهای پذیرش فاز ۸ **BLOCKED / NOT TESTED** هستند. Bradford در Frontend/Demo به‌تنهایی معیار عملیاتی محسوب نمی‌شود؛ API، داده مبنا و مجوز HR در backend موجود نیستند.
-

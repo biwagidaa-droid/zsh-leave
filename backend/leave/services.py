@@ -5,9 +5,9 @@ import datetime as dt
 from decimal import Decimal
 
 from django.db import transaction
-from django.utils import timezone
 
 from zsh_core import workflow as wf
+from .calendar_services import calculate_working_days, resolve_policy_version
 from .models import (AuditEvent, EmployeeProfile, LeaveRequest, LeaveRequestEvent, LeaveType)
 
 
@@ -56,11 +56,18 @@ def _validate_new(employee: EmployeeProfile, ltype: LeaveType, start, end, days:
 
 @transaction.atomic
 def submit_request(*, user, role: str, employee: EmployeeProfile, leave_type: LeaveType,
-                   start, end, working_days: Decimal, reason: str = "",
+                   start, end, working_days: Decimal | None = None, reason: str = "",
                    replacement: EmployeeProfile | None = None,
                    manager_away: bool = False, policy_allow_past: bool = False) -> LeaveRequest:
     # قفل ردیف کارمند: ثبت‌های هم‌زمان یک کارمند سریالی می‌شوند (جلوگیری از هم‌پوشانی)
     EmployeeProfile.objects.select_for_update().get(pk=employee.pk)
+    policy_version = resolve_policy_version(employee, start)
+    calculation = calculate_working_days(
+        employee=employee, start=start, end=end, policy_version=policy_version,
+    )
+    if working_days is not None and Decimal(working_days) != calculation.days:
+        raise wf.ValidationError("تعداد روز مرخصی با تقویم و الگوی کاری معتبر یکسان نیست")
+    working_days = calculation.days
     _validate_new(employee, leave_type, start, end, working_days, replacement, role, policy_allow_past)
     overlap = LeaveRequest.objects.filter(employee=employee, status__in=ACTIVE,
                                           start_date__lte=end, end_date__gte=start)
@@ -72,7 +79,8 @@ def submit_request(*, user, role: str, employee: EmployeeProfile, leave_type: Le
     status = wf.initial_status(ctx)
     req = LeaveRequest.objects.create(
         employee=employee, manager_snapshot=employee.manager, leave_type=leave_type,
-        start_date=start, end_date=end, working_days=working_days, status=status,
+        policy_version=policy_version, start_date=start, end_date=end,
+        working_days=working_days, status=status,
         reason=reason, replacement=replacement,
         decided_by=user if status == wf.APPROVED else None,
         decided_at=timezone.now() if status == wf.APPROVED else None)
