@@ -13,9 +13,14 @@ from .calendar_views import (
     work_patterns,
     work_patterns_history,
 )
+from .authentication import change_password, current_user, login, logout
 from .views import convert_calendar_date, health_check, readiness_check
 
 urlpatterns = [
+    path("auth/login", login, name="auth-login"),
+    path("auth/logout", logout, name="auth-logout"),
+    path("auth/me", current_user, name="auth-me"),
+    path("auth/password", change_password, name="auth-password"),
     path("health/", health_check, name="health"),
     path("ready/", readiness_check, name="ready"),
     path("calendar/convert-date/", convert_calendar_date, name="calendar-date-conversion"),

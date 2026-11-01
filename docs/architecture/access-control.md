@@ -1,7 +1,7 @@
 # Access-Control Architecture
 
 ## 1. Design Principle
-Access control is defined as a future-phase concern. The current mission documents the required model without implementing operational auth mechanisms.
+Authentication now uses Django sessions. Authorization is still a future-phase concern; the current frontend role metadata does not grant backend permissions.
 
 ## 2. Target Model
 Role + Permission + Organization Scope
@@ -30,4 +30,4 @@ Role + Permission + Organization Scope
 - Personal scope
 
 ## 5. Implementation Note
-The operational solution for authentication, session management, and permission enforcement is intentionally deferred to Phase 03. This mission only establishes the required model and governance constraints.
+Login, logout, current-user, CSRF, password-change, and session lifecycle endpoints are implemented with existing Django users, groups, and employee profiles. These endpoints do not implement this document's role/scope permission model. The RBAC source of truth, organization scopes, and enforcement remain deferred to the authorization phase.

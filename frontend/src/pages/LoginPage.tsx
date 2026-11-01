@@ -13,7 +13,7 @@ type FromState = { from?: { pathname?: string; search?: string; hash?: string } 
 
 export function LoginPage() {
   useDocumentTitle("ورود");
-  const { user, login } = useAuth();
+  const { user, login, error: authError, refresh } = useAuth();
   const { mode, toggle } = useTheme();
   const toast = useToast();
   const location = useLocation();
@@ -56,6 +56,14 @@ export function LoginPage() {
           {DEMO_MODE && (
             <Banner>
               حالت نمایشی: رمز واقعی بررسی نمی‌شود. یکی از نقش‌های Demo را انتخاب کنید.
+            </Banner>
+          )}
+          {authError && (
+            <Banner tone="danger">
+              {authError.message}{" "}
+              <button type="button" className="btn ghost sm" onClick={() => void refresh()}>
+                تلاش دوباره
+              </button>
             </Banner>
           )}
           {error && <Banner tone="danger">{error}</Banner>}

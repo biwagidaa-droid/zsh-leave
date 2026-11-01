@@ -1,6 +1,7 @@
 from .settings_base import *  # noqa F401,F403
 
 DEBUG = False
+SECRET_KEY = env("ZSH_SECRET_KEY", required=True)
 SESSION_COOKIE_SECURE = True
 CSRF_COOKIE_SECURE = True
 SECURE_SSL_REDIRECT = True
@@ -11,6 +12,9 @@ ALLOWED_HOSTS = [host.strip() for host in env("ZSH_ALLOWED_HOSTS", "").split(","
 
 if not ALLOWED_HOSTS:
     raise RuntimeError("ZSH_ALLOWED_HOSTS must be set in production.")
+
+if len(SECRET_KEY) < 50:
+    raise RuntimeError("ZSH_SECRET_KEY must contain at least 50 characters in production.")
 
 DATABASES = {
     "default": {

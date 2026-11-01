@@ -25,8 +25,8 @@ Status legend: Not Started, In Progress, Blocked, Completed, Needs Review.
 
 ## Phase 03 – Operational Authentication and Authorization
 - Goal: Implement real identity, RBAC, and organizational policy enforcement.
-- Scope: User lifecycle, roles, permissions, contracts, and approval flows.
-- Status: Not Started
+- Scope: Session authentication is implemented; remaining scope is RBAC, organization scopes, and user lifecycle administration.
+- Status: In Progress (Phase B authentication complete; authorization pending)
 - Dependencies: Phase 02 foundation, approved business policy decisions, HR migration data.
 
 ## Phase 04 – Core HR and Leave Operations

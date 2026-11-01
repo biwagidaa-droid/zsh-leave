@@ -46,4 +46,4 @@ The current backend is intentionally a thin Django application over a domain-fir
 - Logs are structured but intentionally avoid credentials, tokens, and medical details.
 
 ## 8. Future Scaling
-This foundation supports later feature work such as authentication, approval graph, role management, and more complete reporting without forcing a rewrite of the domain engine.
+This foundation supports later feature work such as RBAC, approval graph, and more complete reporting without forcing a rewrite of the domain engine. Session authentication is implemented separately from those authorization features.

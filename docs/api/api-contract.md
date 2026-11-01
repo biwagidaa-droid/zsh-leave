@@ -38,6 +38,21 @@ This contract reflects the current state of the actual backend and frontend inte
   ```
 - Failure status: HTTP 503 with a non-sensitive message if infra dependencies are unavailable
 
+### Authentication and account lifecycle
+
+These same-origin endpoints use Django session cookies and match the frontend HTTP client paths (no trailing slash).
+
+| Method | Endpoint | Contract |
+|---|---|---|
+| POST | `/api/v1/auth/login` | Accepts `{ "username": "...", "password": "..." }`; returns the authenticated frontend `User` shape. Invalid credentials and inactive accounts share a generic 401 response. Login is CSRF-protected and limited to 5 attempts/minute per client IP. |
+| POST | `/api/v1/auth/logout` | Requires an authenticated session and CSRF token; invalidates the session and returns 204. |
+| GET | `/api/v1/auth/me` | Returns the authenticated frontend `User` shape, or 401 when there is no valid session. Also bootstraps/refreshes the CSRF cookie for the SPA. |
+| POST | `/api/v1/auth/password` | Requires an authenticated session and CSRF token; accepts `{ "current": "...", "next": "..." }`, validates the new password, and returns 204. The session remains active with its key rotated. |
+
+Sessions expire after eight hours and are browser-session cookies. Session cookies are HttpOnly and SameSite=Lax; production cookies require HTTPS. Passwords are stored with Argon2, while existing PBKDF2 hashes remain verifiable and upgrade on successful authentication. Password reset and account provisioning are not exposed by this API.
+
+The `roles` and organization fields in the user response are frontend display/route metadata derived from existing Django superuser/group and employee-profile data. They are not an authorization system; backend permission enforcement remains a separate phase.
+
 ### `GET /api/v1/calendar/convert-date/`
 - Status: Implemented (Phase 06 foundation)
 - Permission: AllowAny; stateless conversion with no organization data
@@ -87,7 +102,7 @@ The legacy `/api/v1/holidays/` API remains available for one-day Jalali `PublicH
 - full employee/HR workflow endpoints
 - report generation endpoints
 - admin setting endpoints
-- authentication/session lifecycle APIs
+- password reset and account provisioning APIs
 
 ## 5. Notes
 - Pagination, filtering, and idempotency are not yet enforced at the general API layer because the higher-level business endpoints are not yet implemented.
