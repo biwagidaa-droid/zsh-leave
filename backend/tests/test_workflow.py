@@ -84,6 +84,8 @@ class WorkflowTests(unittest.TestCase):
             transition(APPROVED, "hr_cancel", C(HR))
         with self.assertRaises(PermissionDenied):
             transition(APPROVED, "hr_cancel", C(MANAGER, reason="x"))
+        with self.assertRaises(ConflictError):
+            transition(APPROVED, "hr_cancel", C(HR, reason="ثبت اشتباه", amendment_in_flight=True))
 
     def test_unknown_event(self):
         with self.assertRaises(InvalidTransition):

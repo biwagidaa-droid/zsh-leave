@@ -16,6 +16,14 @@ from .calendar_views import (
 from .authentication import change_password, current_user, login, logout
 from .views import convert_calendar_date, health_check, readiness_check
 from .role_assignment_views import role_assignment_detail, role_assignments
+from .workflow_views import (
+    leave_request_action,
+    leave_request_amend,
+    leave_request_comments,
+    leave_request_detail,
+    leave_request_events,
+    leave_requests,
+)
 
 urlpatterns = [
     path("auth/login", login, name="auth-login"),
@@ -42,4 +50,14 @@ urlpatterns = [
     path("holidays/", calendar_holiday_management, name="holidays"),
     path("holidays/<int:holiday_id>/", calendar_holiday_management, name="holiday-detail"),
     path("working-days/estimate", estimate_working_days, name="working-days-estimate"),
+    path("leave-requests/", leave_requests, name="leave-requests"),
+    path("leave-requests/<int:request_id>/", leave_request_detail, name="leave-request-detail"),
+    path("leave-requests/<int:request_id>/amend", leave_request_amend,
+         name="leave-request-amend"),
+    path("leave-requests/<int:request_id>/<str:action>", leave_request_action,
+         name="leave-request-action"),
+    path("leave-requests/<int:request_id>/comments/", leave_request_comments,
+         name="leave-request-comments"),
+    path("leave-requests/<int:request_id>/events/", leave_request_events,
+         name="leave-request-events"),
 ]

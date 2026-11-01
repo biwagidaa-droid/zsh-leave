@@ -9,9 +9,10 @@
 | Organization | `/companies/`, `/departments/`, `/positions/` | CRUD | مدیر سامانه | ممنوعیت حذف دارای وابسته |
 | Contracts | `/employees/{id}/contract-periods/` | GET/POST | HR | عدم هم‌پوشانی بازه |
 | Leave types | `/leave-types/` | GET؛ POST/PATCH | همه (فیلترشده)؛ HR/سامانه | نوع محرمانه برای غیر HR حذف می‌شود |
-| Requests | `/leave-requests/` GET/POST؛ `/{id}/` GET/PATCH؛ `/{id}/approve|reject|cancel|withdraw|amend|escalate` POST | | طبق ماتریس | همه انتقال‌ها از سرویس؛ reject با `reason`؛ 409 برای تعارض |
-| HR record | `/hr/absences/` POST/PATCH | | HR | مستقیم APPROVED |
-| Comments | `/leave-requests/{id}/comments/` | GET/POST | طرفین مجاز | ممنوع برای نوع محرمانه غیر HR |
+| Requests | `/leave-requests/` GET/POST؛ `/{id}/` GET/PATCH؛ `/{id}/approve|reject|cancel|withdraw|amend` POST | | طبق ماتریس | پیاده‌سازی Phase D؛ همه نوشتن‌ها Idempotency-Key دارند؛ انتقال، اصلاح، رویداد و Audit اتمیک |
+| HR record | `/hr/absences/` POST/PATCH | | HR | در این مرحله پیاده‌سازی نشده |
+| Comments | `/leave-requests/{id}/comments/` | GET/POST | طرفین مجاز | پیاده‌سازی‌شده؛ ممنوع برای نوع محرمانه غیر HR |
+| Event history | `/leave-requests/{id}/events/` | GET | مالک، مدیر snapshot، HR مجاز | پیاده‌سازی‌شده؛ دلیل رویداد محرمانه فقط برای HR |
 | Attachments | `/leave-requests/{id}/attachments/` POST؛ `/attachments/{id}/download` GET | | HR/مالک مجاز | هر دانلود ثبت می‌شود |
 | Balances | `/balances/?year=&employee=` | GET | کارمند خود؛ مدیر زیرمجموعه؛ HR | |
 | Entitlements | `/entitlements/` CRUD؛ `/{id}/adjust` POST؛ `/import/?dry_run=` POST | | HR | adjust با `reason`؛ import با ImportBatch |
@@ -26,4 +27,4 @@
 | Audit | `/audit/events/` | GET | سامانه، HR مجاز | فقط خواندن |
 | Health | `/health/live`, `/health/ready` | GET | عمومی (بدون جزئیات حساس) | شامل DB و آخرین اجرای Job |
 
-برای هر endpoint هنگام پیاده‌سازی: ورودی، پاسخ، خطاها و رویداد حسابرسی در OpenAPI تکمیل می‌شود.
+برای قرارداد جزئی ورودی، پاسخ، خطاها و حسابرسی API، به `api/api-contract.md` مراجعه کنید.

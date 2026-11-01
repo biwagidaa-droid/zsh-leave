@@ -7,6 +7,10 @@ function csrf(): string {
   return m ? decodeURIComponent(m[1]) : "";
 }
 
+function idempotencyKey(): string {
+  return crypto.randomUUID();
+}
+
 /** پیام فارسی پیش‌فرض بر اساس کد وضعیت، وقتی بدنه خطا از سرور قابل‌خواندن نباشد. */
 function fallbackMessage(status: number): string {
   switch (status) {
@@ -89,11 +93,19 @@ export const httpApi: Api = {
     return req(`/leave-requests/${qs ? `?${qs}` : ""}`);
   },
   getRequest: (id) => req(`/leave-requests/${id}/`),
-  createRequest: (d) => req("/leave-requests/", { method: "POST", body: JSON.stringify(d) }),
-  updateRequest: (id, d) => req(`/leave-requests/${id}/`, { method: "PATCH", body: JSON.stringify(d) }),
-  actRequest: (id, action, reason) => req(`/leave-requests/${id}/${action}`, { method: "POST", body: JSON.stringify({ reason }) }),
+  createRequest: (d) => req("/leave-requests/", {
+    method: "POST", headers: { "Idempotency-Key": idempotencyKey() }, body: JSON.stringify(d),
+  }),
+  updateRequest: (id, d) => req(`/leave-requests/${id}/`, {
+    method: "PATCH", headers: { "Idempotency-Key": idempotencyKey() }, body: JSON.stringify(d),
+  }),
+  actRequest: (id, action, reason) => req(`/leave-requests/${id}/${action}`, {
+    method: "POST", headers: { "Idempotency-Key": idempotencyKey() }, body: JSON.stringify({ reason }),
+  }),
   listComments: (id) => req(`/leave-requests/${id}/comments/`),
-  addComment: (id, body) => req(`/leave-requests/${id}/comments/`, { method: "POST", body: JSON.stringify({ body }) }),
+  addComment: (id, body) => req(`/leave-requests/${id}/comments/`, {
+    method: "POST", headers: { "Idempotency-Key": idempotencyKey() }, body: JSON.stringify({ body }),
+  }),
   listAttachments: (id) => req(`/leave-requests/${id}/attachments/`),
   addAttachment: (id, fileName) => req(`/leave-requests/${id}/attachments/`, { method: "POST", body: JSON.stringify({ fileName }) }),
   balances: (year, employeeId) => req(`/balances/?year=${year}${employeeId ? `&employee=${employeeId}` : ""}`),

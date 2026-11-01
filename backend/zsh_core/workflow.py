@@ -135,6 +135,8 @@ def transition(status: str, event: str, ctx: Context) -> str:
             raise PermissionDenied("فقط HR")
         if not ctx.reason.strip():
             raise ValidationError("دلیل الزامی است")
+        if ctx.amendment_in_flight:
+            raise ConflictError("تا پایان اصلاح جاری، لغو درخواست ممکن نیست")
         return CANCELLED
 
     raise InvalidTransition(f"رویداد ناشناخته: {event}")

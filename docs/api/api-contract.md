@@ -1,7 +1,7 @@
 # API Contract
 
 ## 1. Scope and Status
-This contract reflects the current state of the actual backend and frontend integration and is intentionally limited to the implemented or planned public API surface. The mission does not implement full business workflows.
+This contract reflects the current state of the actual backend and frontend integration and is intentionally limited to the implemented or planned public API surface.
 
 ## 2. Base URL
 - `/api/v1/`
@@ -97,6 +97,21 @@ All data-bearing endpoints require the configured authenticated session. Every e
 
 Dates in these contracts are Gregorian ISO dates. Jalali entry/display belongs to the presentation layer; backend remains authoritative for validation and workday calculations. Workday and policy configuration is required: missing configuration returns a conflict rather than silently using a guessed default.
 
+### Phase D operational leave workflow
+
+All leave-request endpoints require an authenticated session. Request visibility is limited to the owner, the request's manager snapshot, or HR with matching organization scope; system administrators and executive viewers do not gain individual-record access. Mutations require an `Idempotency-Key` header (1–128 characters). Reusing a key with the same actor, operation, and payload returns the original resource; reusing it for different input returns 409. Workflow state changes and their append-only event/audit records commit atomically.
+
+| Method | Endpoint | Contract |
+|---|---|---|
+| GET/POST | `/api/v1/leave-requests/` | List scoped requests with `scope=me\|team`, optional `status`, `q`, `page`, and `page_size` (maximum 100), or submit using `employeeId?`, `leaveTypeKey`, `start`, `end`, `reason?`, and `replacementId?`. Workdays are calculated by the backend; a supplied `workingDays` must match. |
+| GET/PATCH | `/api/v1/leave-requests/{id}/` | Read a scoped request or correct a `PENDING` request. Correction accepts `leaveTypeKey?`, `start`, `end`, `reason?`, and `replacementId?`; owner or in-scope HR only. |
+| POST | `/api/v1/leave-requests/{id}/approve`, `/reject`, `/cancel`, `/withdraw` | Apply the corresponding domain transition. Rejection requires a reason. `withdraw` requests cancellation of an approved leave and requires manager/HR decision via `approve_withdraw` or `reject_withdraw`. |
+| POST | `/api/v1/leave-requests/{id}/amend` | Create a correction request for an approved leave. The body may provide `start`, `end`, `reason`, and `replacementId`; omitted fields retain the original value. Approval cancels the original request in the same transaction. The existing frontend `/amend` action submits the unchanged values as a compatibility path. |
+| GET/POST | `/api/v1/leave-requests/{id}/comments/` | List/add comments for request participants. Confidential request comments are restricted to in-scope HR. Comment bodies are append-only and limited to 4,000 characters. |
+| GET | `/api/v1/leave-requests/{id}/events/` | Read append-only request event history. Confidential event reasons are only returned to in-scope HR. |
+
+Out-of-scope request IDs return 404. Invalid transitions and idempotency conflicts return 409, permission failures 403, validation failures 422, and malformed payloads 400. Each transition/correction/comment records its actor and action; sensitive reasons are redacted from audit snapshots for confidential leave.
+
 The legacy `/api/v1/holidays/` API remains available for one-day Jalali `PublicHoliday` entries and uses the same superuser-only write boundary. Its DELETE operation is logical deactivation and requires a reason.
 
 ### Schema endpoints
@@ -104,7 +119,7 @@ The legacy `/api/v1/holidays/` API remains available for one-day Jalali `PublicH
 - `GET /api/v1/docs/` — Implemented via Swagger UI
 
 ## 4. Planned but Unimplemented
-- Leave request/approval APIs using the implemented scoped selectors and object-level permission engine
+- Frontend management screens for range holidays, work patterns, and policy versions
 - Frontend management screens for range holidays, work patterns, and policy versions
 - backend-authoritative hourly leave calculations tied to work patterns and holidays
 - leave-year configuration, rollover, expiry, and their ledger operations
@@ -114,5 +129,5 @@ The legacy `/api/v1/holidays/` API remains available for one-day Jalali `PublicH
 - password reset and account provisioning APIs
 
 ## 5. Notes
-- Pagination, filtering, and idempotency are not yet enforced at the general API layer because the higher-level business endpoints are not yet implemented.
+- Pagination, filtering, and idempotency are enforced on the Phase D leave-request API, not globally on unrelated API resources.
 - The contract is intentionally conservative and aligned with the current frontend surface rather than introducing unsupported domain commitments.

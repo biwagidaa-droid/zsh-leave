@@ -481,6 +481,28 @@ class LeaveRequestEvent(_AppendOnly):
     created_at = models.DateTimeField(auto_now_add=True)
 
 
+class LeaveRequestComment(_AppendOnly):
+    request = models.ForeignKey(LeaveRequest, on_delete=models.PROTECT, related_name="comments")
+    actor = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT)
+    body = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+
+class WorkflowIdempotency(models.Model):
+    actor = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT)
+    key = models.CharField(max_length=128)
+    operation = models.CharField(max_length=64)
+    fingerprint = models.CharField(max_length=64)
+    resource_type = models.CharField(max_length=64)
+    resource_id = models.PositiveBigIntegerField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["actor", "key"], name="uniq_workflow_idempotency"),
+        ]
+
+
 class AuditEvent(_AppendOnly):
     actor = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, on_delete=models.PROTECT)
     origin = models.CharField(max_length=16)
