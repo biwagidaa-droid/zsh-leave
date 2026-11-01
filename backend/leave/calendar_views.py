@@ -5,7 +5,6 @@ import datetime as dt
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db.models import Q
 from django.http import Http404
-from django.utils import timezone
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
@@ -37,6 +36,7 @@ from .calendar_services import (
     resolve_policy_version,
     update_calendar_holiday,
 )
+from .employment_services import is_employed_on, organization_localdate
 from .throttling import rate_limited
 from .models import (
     CalendarHoliday,
@@ -282,6 +282,8 @@ def estimate_working_days(request):
         return _failure("employee_profile_required", "پرونده کارمندی برای کاربر ثبت نشده است", 403)
     if not has_permission(context, READ_WORKDAY_ESTIMATE, employee_id=employee.pk):
         raise Http404
+    if not is_employed_on(employee, start) or not is_employed_on(employee, end):
+        return _failure("employee_not_employed", "کارمند در کل بازه محاسبه اشتغال ندارد", 422)
     try:
         calculation = calculate_working_days(employee=employee, start=start, end=end)
     except CalendarConfigurationError as exc:
@@ -352,7 +354,10 @@ def leave_policies(request):
         if not has_permission(context, READ_LEAVE_POLICY):
             return _failure("employee_profile_required", "پرونده کارمندی برای کاربر ثبت نشده است", 403)
         try:
-            on_date = _parse_date(request.query_params.get("date"), "date") if request.query_params.get("date") else timezone.localdate()
+            on_date = (
+                _parse_date(request.query_params.get("date"), "date")
+                if request.query_params.get("date") else organization_localdate()
+            )
             version = resolve_policy_version(employee, on_date)
         except ValueError as exc:
             return _failure("invalid_date", str(exc), 400)

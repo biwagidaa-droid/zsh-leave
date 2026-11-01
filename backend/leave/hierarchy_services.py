@@ -4,8 +4,8 @@ from collections import defaultdict
 
 from django.core.exceptions import ValidationError
 from django.db import transaction
-from django.utils import timezone
 
+from .employment_services import is_employed_on, organization_localdate
 from .models import Company, Department, EmployeeProfile, OrganizationSite
 
 MAX_HIERARCHY_DEPTH = 1000
@@ -51,11 +51,9 @@ def _validate_department_parent(department: Department) -> None:
 
 def _is_active_manager(employee: EmployeeProfile, today) -> bool:
     return (
-        employee.is_employee
+        is_employed_on(employee, today)
         and employee.account_status == EmployeeProfile.ACCOUNT_ACTIVATED
         and employee.user.is_active
-        and employee.start_date <= today
-        and (employee.end_date is None or employee.end_date >= today)
     )
 
 
@@ -65,7 +63,7 @@ def _validate_manager_chain(employee: EmployeeProfile) -> None:
     if employee.pk is not None and employee.manager_id == employee.pk:
         raise ValidationError({"manager": "کارمند نمی‌تواند مدیر خودش باشد"})
 
-    today = timezone.localdate()
+    today = organization_localdate()
     visited: set[int] = set()
     current_id = employee.manager_id
     for _ in range(MAX_HIERARCHY_DEPTH):
@@ -130,7 +128,7 @@ def validate_employee_relationships(employee: EmployeeProfile) -> None:
             if EmployeeProfile.objects.filter(manager_id=employee.pk).exists():
                 raise ValidationError({"company": "کارمندی که مدیر مستقیم دارد را نمی‌توان به شرکت دیگری منتقل کرد"})
         if EmployeeProfile.objects.filter(manager_id=employee.pk).exists() and not _is_active_manager(
-            employee, timezone.localdate(),
+            employee, organization_localdate(),
         ):
             raise ValidationError({"account_status": "مدیر دارای گزارش مستقیم باید کارمند فعال باقی بماند"})
 
@@ -148,7 +146,7 @@ def hierarchy_issues() -> list[dict]:
         row["id"]: row["company_id"]
         for row in OrganizationSite.objects.order_by("pk").values("id", "company_id")
     }
-    today = timezone.localdate()
+    today = organization_localdate()
     issues: list[dict] = []
     department_by_id = {row["id"]: row for row in departments}
     employee_by_id = {row["id"]: row for row in employees}
@@ -225,11 +223,9 @@ def hierarchy_issues() -> list[dict]:
 
 def _row_is_active_manager(row: dict, today) -> bool:
     return (
-        row["is_employee"]
+        is_employed_on(row, today)
         and row["user__is_active"]
         and row["account_status"] == EmployeeProfile.ACCOUNT_ACTIVATED
-        and row["start_date"] <= today
-        and (row["end_date"] is None or row["end_date"] >= today)
     )
 
 

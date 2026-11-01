@@ -17,6 +17,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from . import audit_services
+from .employment_services import is_employed_on, organization_localdate
 from .models import EmployeeInvitation, EmployeeProfile
 
 TOKEN_PATTERN = re.compile(r"^[A-Za-z0-9_-]{43}$")
@@ -54,10 +55,12 @@ def normalize_email(email: str) -> str:
 def account_access_allowed(user, *, on_date=None) -> bool:
     if not getattr(user, "is_active", False):
         return False
-    profile = EmployeeProfile.objects.filter(user_id=user.pk, is_employee=True).first()
+    profile = EmployeeProfile.objects.select_related("user").filter(
+        user_id=user.pk, is_employee=True,
+    ).first()
     if profile is None:
         return True
-    today = on_date or timezone.localdate()
+    today = on_date or organization_localdate()
     if profile.end_date is not None and profile.end_date < today:
         with transaction.atomic():
             profile = EmployeeProfile.objects.select_for_update().select_related("user").get(
@@ -79,8 +82,7 @@ def account_access_allowed(user, *, on_date=None) -> bool:
         return False
     return (
         profile.account_status == EmployeeProfile.ACCOUNT_ACTIVATED
-        and profile.start_date <= today
-        and (profile.end_date is None or profile.end_date >= today)
+        and is_employed_on(profile, today)
     )
 
 
@@ -139,7 +141,7 @@ def invite_employee(*, employee_id: int, actor, email: str | None = None) -> Inv
         employee = EmployeeProfile.objects.select_for_update().select_related("user").get(
             pk=employee_id,
         )
-        if employee.end_date is not None and employee.end_date < timezone.localdate():
+        if employee.end_date is not None and employee.end_date < organization_localdate():
             raise InvitationError("account_not_invitable")
         if employee.account_status in {
             EmployeeProfile.ACCOUNT_ACTIVATED,
@@ -314,11 +316,11 @@ def activate_invitation(*, raw_token, email, password) -> str | None:
                     EmployeeProfile.ACCOUNT_OFFBOARDED,
                 }
                 or employee.end_date is not None
-                and employee.end_date < timezone.localdate()
+                and employee.end_date < organization_localdate()
                 or supplied_email != invitation.email.casefold()
                 or supplied_email != user.email.casefold()
             ):
-                if employee.end_date is not None and employee.end_date < timezone.localdate():
+                if employee.end_date is not None and employee.end_date < organization_localdate():
                     employee.account_status = EmployeeProfile.ACCOUNT_OFFBOARDED
                     user.is_active = False
                     user.save(update_fields=["is_active"])
@@ -377,7 +379,7 @@ def activate_invitation(*, raw_token, email, password) -> str | None:
 
 def synchronize_employment_access(*, employee: EmployeeProfile, actor) -> None:
     employee.user.refresh_from_db()
-    today = timezone.localdate()
+    today = organization_localdate()
     if employee.end_date is not None and employee.end_date < today:
         employee.account_status = EmployeeProfile.ACCOUNT_OFFBOARDED
         employee.user.is_active = False

@@ -145,6 +145,10 @@ class OrganizationalHierarchyIntegrityTests(TestCase):
         with self.assertRaises(ValidationError):
             report.save(update_fields=["manager"])
 
+        employed_through_today = self.make_employee("ENDS-TODAY", end_date=today)
+        report.manager = employed_through_today
+        report.save(update_fields=["manager"])
+
         expired = self.make_employee(
             "EXPIRED", end_date=today - dt.timedelta(days=1),
         )

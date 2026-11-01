@@ -16,6 +16,7 @@ from leave.calendar_services import (
     create_work_pattern,
     resolve_policy_version,
 )
+from leave.employment_services import organization_localdate
 from leave.models import (
     CalendarHoliday,
     CalendarHolidayHistory,
@@ -225,6 +226,39 @@ class CalendarApiTests(TestCase):
     def test_calendar_apis_require_authentication(self):
         response = self.client.get("/api/v1/calendar/events/", {"from": "2026-11-01", "to": "2026-11-30"})
         self.assertIn(response.status_code, (401, 403))
+
+    def test_workday_estimate_requires_employment_for_the_requested_period(self):
+        self.client.force_authenticate(user=self.user)
+        today = organization_localdate()
+        tomorrow = today + dt.timedelta(days=1)
+        self.employee.start_date = tomorrow
+        self.employee.save(update_fields=["start_date"])
+
+        future_hire = self.client.get(
+            "/api/v1/working-days/estimate",
+            {"start": today.isoformat(), "end": today.isoformat()},
+        )
+        self.assertEqual(future_hire.status_code, 422)
+        self.assertEqual(future_hire.json()["code"], "employee_not_employed")
+
+        self.employee.start_date = today - dt.timedelta(days=10)
+        self.employee.end_date = today - dt.timedelta(days=1)
+        self.employee.save(update_fields=["start_date", "end_date"])
+        former_employee = self.client.get(
+            "/api/v1/working-days/estimate",
+            {"start": today.isoformat(), "end": today.isoformat()},
+        )
+        self.assertEqual(former_employee.status_code, 422)
+        self.assertEqual(former_employee.json()["code"], "employee_not_employed")
+
+        self.employee.end_date = None
+        self.employee.save(update_fields=["end_date"])
+        employed = self.client.get(
+            "/api/v1/working-days/estimate",
+            {"start": today.isoformat(), "end": today.isoformat()},
+        )
+        self.assertEqual(employed.status_code, 409)
+        self.assertEqual(employed.json()["code"], "calendar_not_configured")
 
     def test_calendar_team_scope_is_direct_report_only_and_redacts_sensitive_type(self):
         leave_type = LeaveType.objects.create(

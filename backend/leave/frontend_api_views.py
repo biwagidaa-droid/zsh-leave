@@ -30,6 +30,12 @@ from .entitlement_services import (
     create_entitlement,
     entitlement_balance,
 )
+from .employment_services import (
+    employees_employed_on,
+    employment_status_history,
+    is_employed_on,
+    organization_localdate,
+)
 from .invitation_services import (
     InvitationError,
     invite_employee,
@@ -132,7 +138,7 @@ def _employee_json(employee: EmployeeProfile) -> dict:
         ),
         "startDate": employee.start_date.isoformat(),
         "endDate": employee.end_date.isoformat() if employee.end_date else None,
-        "isActive": employee.end_date is None,
+        "isActive": is_employed_on(employee),
         "accountStatus": employee.account_status,
     }
 
@@ -445,7 +451,7 @@ def employees(request, employee_id: int | None = None):
             if data.get("managerId") else None
         )
         start = dt.date.fromisoformat(data["startDate"]) if data.get("startDate") else (
-            employee.start_date if employee else timezone.localdate()
+            employee.start_date if employee else organization_localdate()
         )
         end = dt.date.fromisoformat(data["endDate"]) if data.get("endDate") else (
             employee.end_date if employee else None
@@ -857,7 +863,7 @@ def client_policy(request):
     context = _context(request)
     if not context.employee:
         return _failure("employee_profile_required", "پرونده کارمندی برای دریافت سیاست لازم است", 403)
-    today = timezone.localdate()
+    today = organization_localdate()
     from .calendar_services import _patterns_for
 
     pattern = next(iter(_patterns_for(context.employee, today, today)), None)
@@ -871,7 +877,7 @@ def client_policy(request):
         "workdayMinutes": pattern.daily_work_minutes if pattern else 0,
         "autoCancelEnabled": False,
         "autoCancelDays": None,
-        "timezoneLabel": timezone.get_current_timezone_name(),
+        "timezoneLabel": timezone.get_default_timezone_name(),
     })
 
 
@@ -957,16 +963,55 @@ def coverage(request):
         approved = approved.filter(leave_type__confidential=False)
     department_ids = employee_rows.values_list("department_id", flat=True)
     departments = Department.objects.filter(pk__in=department_ids).distinct()
+    population = list(
+        employee_rows.filter(department_id__in=departments.values("pk")).values(
+            "id", "department_id", "is_employee", "start_date", "end_date", "account_status",
+        )
+    )
+    status_history = employment_status_history(
+        [employee["id"] for employee in population],
+        through_date=end,
+    )
+    employees_by_department: dict[int, list[dict]] = {}
+    for employee in population:
+        employees_by_department.setdefault(employee["department_id"], []).append(employee)
+    days = [start + dt.timedelta(days=n) for n in range((end - start).days + 1)]
+    employed_by_day: dict[dt.date, dict[int, set[int]]] = {}
+    for day in days:
+        employed_by_department = {}
+        for department_id, employees in employees_by_department.items():
+            employed_ids = {
+                employee["id"]
+                for employee in employees
+                if is_employed_on(
+                    employee,
+                    day,
+                    status_history=status_history.get(employee["id"], ()),
+                )
+            }
+            employed_by_department[department_id] = employed_ids
+        employed_by_day[day] = employed_by_department
+
+    away_by_day: dict[dt.date, dict[int, set[int]]] = {
+        day: {department.pk: set() for department in departments}
+        for day in days
+    }
+    leave_spans = approved.values_list(
+        "employee__department_id", "employee_id", "start_date", "end_date",
+    ).distinct()
+    for department_id, employee_id, leave_start, leave_end in leave_spans:
+        for day in days:
+            if leave_start <= day <= leave_end:
+                away_by_day[day].setdefault(department_id, set()).add(employee_id)
+
     result = []
-    for day in (start + dt.timedelta(days=n) for n in range((end - start).days + 1)):
+    for day in days:
         for department in departments:
-            away = approved.filter(
-                employee__department=department, start_date__lte=day, end_date__gte=day,
-            ).values("employee_id").distinct().count()
-            headcount = employee_rows.filter(department=department, end_date__isnull=True).count()
+            employed_ids = employed_by_day[day].get(department.pk, set())
+            away = len(away_by_day[day].get(department.pk, set()) & employed_ids)
             result.append({
                 "date": day.isoformat(), "departmentName": department.name,
-                "awayCount": away, "headcount": headcount,
+                "awayCount": away, "headcount": len(employed_ids),
             })
     return Response(result)
 
@@ -981,7 +1026,7 @@ def reports(request, kind: str):
         return _failure("unknown_report", "نوع گزارش شناخته‌شده نیست", 404)
     if context.has_role("hr"):
         rows = scoped_hr_leave_requests(context)
-        people = EmployeeProfile.objects.filter(pk__in=rows.values("employee_id"))
+        people = hr_operation_employees(context)
     else:
         employee_scope = Q()
         for assignment in RoleAssignment.objects.filter(user=request.user, role="exec", is_active=True):
@@ -993,13 +1038,16 @@ def reports(request, kind: str):
                 employee_scope |= Q(company_id=assignment.company_id, department_id=assignment.department_id)
         people = EmployeeProfile.objects.filter(employee_scope, is_employee=True)
         rows = LeaveRequest.objects.filter(employee_id__in=people.values("pk"))
+    people = employees_employed_on(people, organization_localdate())
     try:
         min_size = settings_schema.resolve({
             setting.key: setting.value for setting in SystemSetting.objects.all()
         })["privacy.min_group_size"]
     except settings_schema.SettingError as exc:
         return _failure("invalid_settings", str(exc), 409)
-    report_rows = rows if context.has_role("hr") else rows.filter(leave_type__confidential=False)
+    report_rows = rows.filter(employee_id__in=people.values("pk"))
+    if not context.has_role("hr"):
+        report_rows = report_rows.filter(leave_type__confidential=False)
     approved = report_rows.filter(status="APPROVED")
     if kind == "absences":
         categories = approved.values("leave_type__label_fa").annotate(
@@ -1034,13 +1082,15 @@ def reports(request, kind: str):
             for item in categories if item["people"] >= min_size
         ]
     else:
-        return Response({
-            "title": kind, "series": [],
-            "note": "تحلیل Bradford در صفحه اختصاصی منابع انسانی و بر پایه قرارداد و تقویم کارکنان محاسبه می‌شود.",
-        })
+        series = []
     total_people = people.count()
     if total_people < min_size:
         return Response({"title": kind, "note": "برای رعایت حداقل گروه، داده این گزارش نمایش داده نمی‌شود.", "series": []})
+    if kind == "bradford":
+        return Response({
+            "title": kind, "series": series,
+            "note": "تحلیل Bradford در صفحه اختصاصی منابع انسانی و بر پایه قرارداد و تقویم کارکنان محاسبه می‌شود.",
+        })
     return Response({"title": kind, "series": series})
 
 

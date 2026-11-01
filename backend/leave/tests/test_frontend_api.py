@@ -7,7 +7,9 @@ from django.contrib.auth import get_user_model
 from django.core.cache import cache
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.core.exceptions import PermissionDenied
+from django.db import connection
 from django.test import TestCase, override_settings
+from django.test.utils import CaptureQueriesContext
 from django.urls import resolve
 from rest_framework.test import APIClient
 
@@ -15,6 +17,8 @@ from leave.authorization import MANAGE_GLOBAL_LEAVE_TYPES, authorization_context
 from leave.authorization_services import grant_role_assignment
 from leave.admin_services import save_leave_type
 from leave.entitlement_services import create_entitlement
+from leave.employment_services import organization_localdate
+from leave.invitation_services import suspend_employee
 from leave.models import (
     AuditEvent,
     BradfordNote,
@@ -397,6 +401,117 @@ class FrontendApiTests(TestCase):
             self.client.get(f"/api/v1/employees/{self.employee.pk}/contract-periods/").json()[0]["workDays"],
             [5, 6, 0, 1, 2],
         )
+
+    def test_employee_api_status_uses_effective_employment_dates(self):
+        today = organization_localdate()
+        self.employee.end_date = today + dt.timedelta(days=2)
+        self.employee.save(update_fields=["end_date"])
+        future = EmployeeProfile.objects.create(
+            user=get_user_model().objects.create_user(username="api-future-hire"),
+            company=self.company, department=self.department, personnel_code="API-FUTURE",
+            start_date=today + dt.timedelta(days=1),
+        )
+        suspended = EmployeeProfile.objects.create(
+            user=get_user_model().objects.create_user(username="api-suspended"),
+            company=self.company, department=self.department, personnel_code="API-SUSPENDED",
+            start_date=today - dt.timedelta(days=1),
+            account_status=EmployeeProfile.ACCOUNT_SUSPENDED,
+        )
+
+        employees = {
+            row["id"]: row for row in self.client.get("/api/v1/employees/").json()
+        }
+
+        self.assertTrue(employees[self.employee.pk]["isActive"])
+        self.assertFalse(employees[future.pk]["isActive"])
+        self.assertFalse(employees[suspended.pk]["isActive"])
+
+    def test_coverage_headcount_is_effective_for_each_day_including_history(self):
+        today = organization_localdate()
+        yesterday = today - dt.timedelta(days=1)
+        tomorrow = today + dt.timedelta(days=1)
+        self.employee.end_date = today
+        self.employee.save(update_fields=["end_date"])
+
+        starts_today = EmployeeProfile.objects.create(
+            user=get_user_model().objects.create_user(username="coverage-start-today"),
+            company=self.company, department=self.department, personnel_code="COV-TODAY",
+            start_date=today, end_date=today,
+        )
+        starts_tomorrow = EmployeeProfile.objects.create(
+            user=get_user_model().objects.create_user(username="coverage-future-start"),
+            company=self.company, department=self.department, personnel_code="COV-FUTURE",
+            start_date=tomorrow,
+        )
+        future_end = EmployeeProfile.objects.create(
+            user=get_user_model().objects.create_user(username="coverage-future-end"),
+            company=self.company, department=self.department, personnel_code="COV-END",
+            start_date=yesterday - dt.timedelta(days=2), end_date=tomorrow,
+        )
+        past_end = EmployeeProfile.objects.create(
+            user=get_user_model().objects.create_user(username="coverage-past-end"),
+            company=self.company, department=self.department, personnel_code="COV-PAST",
+            start_date=yesterday - dt.timedelta(days=2), end_date=yesterday - dt.timedelta(days=1),
+        )
+
+        with CaptureQueriesContext(connection) as one_day_queries:
+            one_day_response = self.client.get(
+                f"/api/v1/coverage/?from={today.isoformat()}&to={today.isoformat()}",
+            )
+        with CaptureQueriesContext(connection) as three_day_queries:
+            response = self.client.get(
+                f"/api/v1/coverage/?from={yesterday.isoformat()}&to={tomorrow.isoformat()}",
+            )
+        self.assertEqual(one_day_response.status_code, 200, one_day_response.content)
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertEqual(len(three_day_queries), len(one_day_queries))
+        headcount_by_date = {row["date"]: row["headcount"] for row in response.json()}
+
+        self.assertEqual(headcount_by_date[yesterday.isoformat()], 3)
+        self.assertEqual(headcount_by_date[today.isoformat()], 4)
+        self.assertEqual(headcount_by_date[tomorrow.isoformat()], 3)
+        self.assertEqual(EmployeeProfile.objects.filter(pk__in=[
+            starts_today.pk, starts_tomorrow.pk, future_end.pk, past_end.pk,
+        ]).count(), 4)
+
+    def test_coverage_uses_audited_status_as_of_each_historical_day(self):
+        today = organization_localdate()
+        yesterday = today - dt.timedelta(days=1)
+        suspend_employee(employee_id=self.employee.pk, actor=self.hr_user)
+
+        response = self.client.get(
+            f"/api/v1/coverage/?from={yesterday.isoformat()}&to={today.isoformat()}",
+        )
+
+        self.assertEqual(response.status_code, 200, response.content)
+        headcount_by_date = {row["date"]: row["headcount"] for row in response.json()}
+        self.assertEqual(headcount_by_date[yesterday.isoformat()], 2)
+        self.assertEqual(headcount_by_date[today.isoformat()], 1)
+
+    def test_historical_report_population_excludes_future_and_former_employees(self):
+        SystemSetting.objects.create(key="privacy.min_group_size", value=2)
+        today = organization_localdate()
+        former_user = get_user_model().objects.create_user(username="report-former")
+        former = EmployeeProfile.objects.create(
+            user=former_user, company=self.company, department=self.department,
+            personnel_code="REPORT-FORMER", start_date=today - dt.timedelta(days=10),
+            end_date=today - dt.timedelta(days=1),
+        )
+        for employee in (self.employee, former):
+            LeaveRequest.objects.create(
+                employee=employee, leave_type=self.leave_type,
+                start_date=today - dt.timedelta(days=5),
+                end_date=today - dt.timedelta(days=5),
+                working_days=Decimal("1"), status="APPROVED",
+            )
+
+        response = self.client.get("/api/v1/reports/absences")
+        bradford = self.client.get("/api/v1/reports/bradford")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["series"], [])
+        self.assertNotIn("حداقل گروه", bradford.json().get("note", ""))
+        self.assertEqual(LeaveRequest.objects.filter(employee__in=(self.employee, former)).count(), 2)
 
     def test_confidential_balances_require_hr_scope(self):
         create_entitlement(

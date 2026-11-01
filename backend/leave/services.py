@@ -13,6 +13,7 @@ from zsh_core import workflow as wf
 from . import audit_services
 from .authorization import HR, authorization_context, can_decide_leave_request, scoped_leave_requests
 from .calendar_services import calculate_working_days, resolve_policy_version
+from .employment_services import is_employed_on, organization_localdate
 from .entitlement_services import (
     internal_idempotency_key,
     release_request,
@@ -103,7 +104,7 @@ def _validate_new(employee: EmployeeProfile, ltype: LeaveType, start, end, days:
         raise wf.ValidationError("این نوع مرخصی فعال نیست")
     if role == wf.EMPLOYEE and not ltype.employee_requestable:
         raise wf.PermissionDenied("این نوع مرخصی را فقط HR ثبت می‌کند")
-    if not employee.is_employee or (employee.end_date and employee.end_date < dt.date.today()):
+    if not is_employed_on(employee, start) or not is_employed_on(employee, end):
         raise wf.ValidationError("کارمند فعال نیست")
     if start > end:
         raise wf.ValidationError("تاریخ شروع نباید بعد از پایان باشد")
@@ -113,12 +114,14 @@ def _validate_new(employee: EmployeeProfile, ltype: LeaveType, start, end, days:
         raise wf.ValidationError("درج توضیح برای این نوع مرخصی الزامی است")
     if (end - start).days + 1 < days:
         raise wf.ValidationError("تعداد روز از طول بازه بیشتر است")
-    if end < dt.date.today() and role != wf.HR and not policy_allow_past:
+    if end < organization_localdate() and role != wf.HR and not policy_allow_past:
         raise wf.ValidationError("ثبت مرخصی گذشته مجاز نیست")
     if ltype.requires_replacement:
         if replacement is None:
             raise wf.ValidationError("انتخاب جانشین الزامی است")
-        if (replacement.pk == employee.pk or not replacement.is_employee
+        if (replacement.pk == employee.pk
+                or not is_employed_on(replacement, start)
+                or not is_employed_on(replacement, end)
                 or replacement.company_id != employee.company_id):
             raise wf.ValidationError("جانشین نامعتبر است")
 

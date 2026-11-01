@@ -14,6 +14,7 @@ from django.utils import timezone
 from rest_framework.test import APIClient
 
 from leave.invitation_services import account_access_allowed, invite_employee
+from leave.employment_services import organization_localdate
 from leave.models import (
     AuditEvent,
     Company,
@@ -356,6 +357,29 @@ class EmployeeInvitationTests(TestCase):
         self.assertTrue(
             account_access_allowed(self.user, on_date=self.employee.start_date),
         )
+
+    def test_employee_access_observes_inclusive_dates_and_suspension(self):
+        today = organization_localdate()
+        self.user.is_active = True
+        self.user.save(update_fields=["is_active"])
+        self.employee.account_status = EmployeeProfile.ACCOUNT_ACTIVATED
+        self.employee.start_date = today - timedelta(days=1)
+        self.employee.end_date = today
+        self.employee.save(update_fields=["account_status", "start_date", "end_date"])
+        self.assertTrue(account_access_allowed(self.user, on_date=today))
+
+        self.employee.end_date = today + timedelta(days=1)
+        self.employee.save(update_fields=["end_date"])
+        self.assertTrue(account_access_allowed(self.user, on_date=today))
+
+        self.employee.start_date = today + timedelta(days=1)
+        self.employee.save(update_fields=["start_date"])
+        self.assertFalse(account_access_allowed(self.user, on_date=today))
+
+        self.employee.start_date = today - timedelta(days=1)
+        self.employee.account_status = EmployeeProfile.ACCOUNT_SUSPENDED
+        self.employee.save(update_fields=["start_date", "account_status"])
+        self.assertFalse(account_access_allowed(self.user, on_date=today))
 
     def test_development_link_is_never_returned_when_debug_is_disabled(self):
         with override_settings(
