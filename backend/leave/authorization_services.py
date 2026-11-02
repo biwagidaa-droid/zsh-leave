@@ -1,10 +1,11 @@
 from django.contrib.auth import get_user_model
-from django.core.exceptions import ValidationError
+from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
 from django.http import Http404
 
+from . import audit_services
+from .authorization import MANAGE_ROLE_ASSIGNMENTS, authorization_context, has_permission
 from .models import (
-    AuditEvent,
     Company,
     Department,
     EmployeeProfile,
@@ -18,6 +19,10 @@ def grant_role_assignment(*, actor, user_id: int, role: str, scope: str,
                           company_id: int | None = None, site_id: int | None = None,
                           department_id: int | None = None,
                           employee_id: int | None = None) -> RoleAssignment:
+    if not has_permission(
+        authorization_context(actor), MANAGE_ROLE_ASSIGNMENTS,
+    ):
+        raise PermissionDenied("مدیریت نقش‌ها فقط برای مدیر سامانه مجاز است")
     user_model = get_user_model()
     target_user = user_model.objects.select_for_update().get(pk=user_id, is_active=True)
     if target_user.pk == actor.pk:
@@ -40,29 +45,21 @@ def grant_role_assignment(*, actor, user_id: int, role: str, scope: str,
         created_by=actor,
     )
     assignment.save()
-    AuditEvent.objects.create(
+    audit_services.record_model_change(
         actor=actor,
-        origin="authorization",
         action="role.assignment.granted",
-        entity="RoleAssignment",
-        entity_id=str(assignment.pk),
-        before=None,
-        after={
-            "userId": target_user.pk,
-            "role": assignment.role,
-            "scope": assignment.scope,
-            "companyId": assignment.company_id,
-            "siteId": assignment.site_id,
-            "departmentId": assignment.department_id,
-            "employeeId": assignment.employee_id,
-        },
-        reason="",
+        instance=assignment,
+        origin="authorization",
     )
     return assignment
 
 
 @transaction.atomic
 def revoke_role_assignment(*, actor, assignment_id: int) -> None:
+    if not has_permission(
+        authorization_context(actor), MANAGE_ROLE_ASSIGNMENTS,
+    ):
+        raise PermissionDenied("مدیریت نقش‌ها فقط برای مدیر سامانه مجاز است")
     active_assignments = list(
         RoleAssignment.objects.select_for_update().filter(is_active=True).order_by("pk")
     )
@@ -71,15 +68,7 @@ def revoke_role_assignment(*, actor, assignment_id: int) -> None:
         raise Http404
     if assignment.user_id == actor.pk:
         raise ValidationError({"assignment": "نقش‌های خود را نمی‌توانید لغو کنید"})
-    before = {
-        "userId": assignment.user_id,
-        "role": assignment.role,
-        "scope": assignment.scope,
-        "companyId": assignment.company_id,
-        "siteId": assignment.site_id,
-        "departmentId": assignment.department_id,
-        "employeeId": assignment.employee_id,
-    }
+    before = audit_services.snapshot(assignment)
     if assignment.role == RoleAssignment.ROLE_ADMIN:
         active_admins = [
             item for item in active_assignments
@@ -91,15 +80,12 @@ def revoke_role_assignment(*, actor, assignment_id: int) -> None:
     assignment.is_active = False
     assignment.revoked_by = actor
     assignment.save(update_fields=["is_active", "revoked_by", "updated_at"])
-    AuditEvent.objects.create(
+    audit_services.record_model_change(
         actor=actor,
-        origin="authorization",
         action="role.assignment.revoked",
-        entity="RoleAssignment",
-        entity_id=str(assignment.pk),
+        instance=assignment,
+        origin="authorization",
         before=before,
-        after=None,
-        reason="",
     )
 
 

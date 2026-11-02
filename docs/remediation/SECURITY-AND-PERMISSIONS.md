@@ -2,7 +2,7 @@
 
 ## اصل اجرای مجوز
 
-Backend مرجع مجوز است. `authorization_context` نقش‌ها را از کاربر فعال، profile و `RoleAssignment` فعال می‌سازد؛ selectorهای `scoped_employees` و `scoped_hr_leave_requests` دامنه را در query اعمال می‌کنند. این سند وضعیت بررسی‌شده فازهای ۱ و ۲ را ثبت می‌کند و ادعای ممیزی کامل همه APIها نیست.
+Backend مرجع مجوز است. `authorization_context` نقش‌ها را از کاربر فعال، profile و `RoleAssignment` فعال می‌سازد؛ selectorهای `scoped_employees` و `scoped_hr_leave_requests` دامنه را در query اعمال می‌کنند. این سند وضعیت بررسی‌شده فازهای ۱ تا ۳ را ثبت می‌کند و ادعای ممیزی کامل همه APIها نیست.
 
 ## ماتریس حداقلی مسیرهای بررسی‌شده
 
@@ -22,7 +22,8 @@ Backend مرجع مجوز است. `authorization_context` نقش‌ها را ا�
 - گزارش executive از رکوردهای confidential برای absences، trends، process-health و balance aggregate استفاده نمی‌کند.
 - Coverage مدیر، `awayCount` را با درخواست‌های غیرمحرمانه محاسبه می‌کند. HR scoped می‌تواند aggregate کامل محدوده خود را ببیند.
 - privacy group-size موجود همچنان برای گروه‌های کوچک اعمال می‌شود.
-- `leave_types` حاوی taxonomy سراسری است و اتصال LeaveType به شرکت ندارد؛ مرز خواندن metadata انواع محرمانه در فاز global configuration/RBAC دوباره بررسی می‌شود.
+- `LeaveType` taxonomy سراسری و بدون اتصال به شرکت است. scoped HR فقط انواع فعال را برای کار HR می‌خواند و مجوز نوشتن ندارد؛ employee/manager فقط انواع فعال و قابل درخواست را می‌خوانند؛ admin global همه انواع را می‌خواند. `leave_type.global.manage` مختص admin سراسری/superuser است.
+- ایجاد/ویرایش/غیرفعال‌سازی LeaveType از API و سرویس ادمین هر دو نیازمند permission و دلیل‌اند؛ AuditEvent append-only ثبت actor، before/after، دلیل، timestamp و `X-Correlation-ID` اختیاری را ذخیره می‌کند. حذف، bulk mutation و import برای LeaveType route پشتیبانی‌شده ندارند.
 - route گزارش export در `leave/urls.py` وجود ندارد؛ serializerهای CSV/XLSX به‌تنهایی endpoint داده نیستند.
 
 ## دامنه و چرخه حساب

@@ -89,6 +89,33 @@ class ImportTests(unittest.TestCase):
     def test_empty_file_not_ok(self):
         self.assertFalse(parse(self.HEAD).ok)
 
+    def test_invalid_utf8_and_short_rows_are_rejected(self):
+        invalid_encoding = I.parse_entitlement_csv(
+            b"\xff", EMP, TYPES, 1400, 1410,
+        )
+        self.assertEqual(invalid_encoding.fatal_code, "invalid_encoding")
+
+        short_row = parse(self.HEAD + "P001,annual,1405\n")
+        self.assertEqual(short_row.issues[0].code, "invalid_column_count")
+        self.assertEqual(short_row.issues[0].line, 2)
+
+    def test_duplicate_headers_extra_cells_and_malformed_csv_are_rejected(self):
+        duplicate_headers = I.parse_entitlement_csv(
+            "personnel_code,type,leave_type_key,year,days\n",
+            EMP,
+            TYPES,
+            1400,
+            1410,
+            header_aliases={"type": "leave_type_key", "days": "base_days"},
+        )
+        self.assertEqual(duplicate_headers.fatal_code, "duplicate_header")
+
+        extra_cell = parse(self.HEAD + "P001,annual,1405,10,extra\n")
+        self.assertEqual(extra_cell.issues[0].code, "invalid_column_count")
+
+        malformed = parse(self.HEAD + 'P001,"annual,1405,10\n')
+        self.assertEqual(malformed.fatal_code, "malformed_csv")
+
 
 class ReportTests(unittest.TestCase):
     W = (d(2026, 3, 21), d(2027, 3, 20))

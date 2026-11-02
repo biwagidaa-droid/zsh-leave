@@ -18,36 +18,44 @@ def sanitize_cell(v: Any) -> Any:
     if isinstance(v, (int, float, Decimal)):
         return v
     s = str(v)
-    stripped = s.lstrip(" ")
-    if stripped.startswith(_DANGEROUS_PREFIX):
+    stripped = s.lstrip()
+    if s.startswith(_DANGEROUS_PREFIX) or stripped.startswith(("=", "+", "-", "@")):
         return "'" + s
     return s
 
 
+def iter_csv_bytes(headers: Sequence[str], rows: Iterable[Sequence[Any]]) -> Iterable[bytes]:
+    """Yield UTF-8-BOM CSV output one row at a time."""
+    buf = io.StringIO(newline="")
+    writer = csv.writer(buf, lineterminator="\r\n")
+    yield b"\xef\xbb\xbf"
+    writer.writerow([sanitize_cell(header) for header in headers])
+    yield buf.getvalue().encode("utf-8")
+    for row in rows:
+        buf.seek(0)
+        buf.truncate(0)
+        writer.writerow([sanitize_cell(cell) for cell in row])
+        yield buf.getvalue().encode("utf-8")
+
+
 def to_csv_bytes(headers: Sequence[str], rows: Iterable[Sequence[Any]]) -> bytes:
     """UTF-8 با BOM (برای نمایش صحیح فارسی در Excel) و پایان‌خط CRLF."""
-    buf = io.StringIO(newline="")
-    w = csv.writer(buf, lineterminator="\r\n")
-    w.writerow([sanitize_cell(h) for h in headers])
-    for r in rows:
-        w.writerow([sanitize_cell(c) for c in r])
-    return buf.getvalue().encode("utf-8-sig")
+    return b"".join(iter_csv_bytes(headers, rows))
 
 
 def to_xlsx_bytes(headers: Sequence[str], rows: Iterable[Sequence[Any]], sheet_title: str = "گزارش") -> bytes:
     from openpyxl import Workbook
-    wb = Workbook()
-    ws = wb.active
-    ws.title = sheet_title[:31]
+    wb = Workbook(write_only=True)
+    wb.properties.creator = "ZSH Leave"
+    wb.properties.lastModifiedBy = "ZSH Leave"
+    wb.properties.title = "ZSH Leave export"
+    wb.properties.subject = ""
+    wb.properties.description = ""
+    ws = wb.create_sheet(title=sheet_title[:31])
     ws.sheet_view.rightToLeft = True
     ws.append([sanitize_cell(h) for h in headers])
     for r in rows:
         ws.append([sanitize_cell(c) if not isinstance(c, Decimal) else float(c) for c in r])
-    # رشته‌ها همیشه به‌صورت متن ذخیره شوند تا Excel آن‌ها را فرمول تفسیر نکند
-    for row in ws.iter_rows():
-        for cell in row:
-            if isinstance(cell.value, str):
-                cell.data_type = "s"
     out = io.BytesIO()
     wb.save(out)
     return out.getvalue()

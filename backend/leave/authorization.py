@@ -21,6 +21,7 @@ READ_WORK_PATTERNS = "work-pattern.read"
 READ_LEAVE_POLICY = "leave-policy.read"
 MANAGE_SYSTEM_CONFIGURATION = "system-configuration.manage"
 MANAGE_ROLE_ASSIGNMENTS = "role-assignment.manage"
+MANAGE_GLOBAL_LEAVE_TYPES = "leave_type.global.manage"
 
 
 @dataclass(frozen=True)
@@ -93,7 +94,9 @@ def has_permission(context: AuthorizationContext, permission: str, *,
     if not getattr(context.user, "is_active", False):
         return False
 
-    if permission in {MANAGE_SYSTEM_CONFIGURATION, MANAGE_ROLE_ASSIGNMENTS}:
+    if permission in {
+        MANAGE_SYSTEM_CONFIGURATION, MANAGE_ROLE_ASSIGNMENTS, MANAGE_GLOBAL_LEAVE_TYPES,
+    }:
         return context.has_role(ADMIN)
     if permission == READ_COMPANY_CALENDAR:
         if company_id is not None:
@@ -153,7 +156,7 @@ def scoped_hr_leave_requests(context: AuthorizationContext) -> QuerySet[LeaveReq
                 employee__company_id=assignment.company_id,
                 employee_id=assignment.employee_id,
             )
-    return LeaveRequest.objects.filter(filters).distinct() if filters else LeaveRequest.objects.none()
+    return LeaveRequest.objects.filter(filters) if filters else LeaveRequest.objects.none()
 
 
 def scoped_leave_requests(context: AuthorizationContext) -> QuerySet[LeaveRequest]:
@@ -171,7 +174,7 @@ def scoped_leave_requests(context: AuthorizationContext) -> QuerySet[LeaveReques
     hr_queryset = scoped_hr_leave_requests(context)
     if context.has_role(HR):
         filters |= Q(pk__in=hr_queryset.values("pk"))
-    return LeaveRequest.objects.filter(filters).distinct() if filters else LeaveRequest.objects.none()
+    return LeaveRequest.objects.filter(filters) if filters else LeaveRequest.objects.none()
 
 
 def can_view_leave_request(context: AuthorizationContext, leave_request: LeaveRequest) -> bool:
@@ -199,16 +202,27 @@ def can_decide_leave_request(context: AuthorizationContext, leave_request: Leave
 
 
 def scoped_employees(context: AuthorizationContext) -> QuerySet[EmployeeProfile]:
-    """Scope employee records to self, direct reports, and explicitly assigned HR scope."""
+    """Return general visible employees: self, direct reports, and assigned HR scope."""
     if not getattr(context.user, "is_active", False):
         return EmployeeProfile.objects.none()
     filters = Q()
     if context.employee_id:
         filters |= Q(pk=context.employee_id)
-        filters |= Q(manager_id=context.employee_id, company_id=context.employee.company_id)
+    filters |= Q(pk__in=manager_team_employees(context).values("pk"))
     filters |= Q(pk__in=scoped_hr_employees(context).values("pk"))
-    return EmployeeProfile.objects.filter(filters, is_employee=True).distinct() if filters else (
+    return EmployeeProfile.objects.filter(filters, is_employee=True) if filters else (
         EmployeeProfile.objects.none()
+    )
+
+
+def manager_team_employees(context: AuthorizationContext) -> QuerySet[EmployeeProfile]:
+    """Return only the current employee's direct reports in the same company."""
+    if not getattr(context.user, "is_active", False) or context.employee_id is None:
+        return EmployeeProfile.objects.none()
+    return EmployeeProfile.objects.filter(
+        manager_id=context.employee_id,
+        company_id=context.employee.company_id,
+        is_employee=True,
     )
 
 
@@ -228,6 +242,15 @@ def scoped_hr_employees(context: AuthorizationContext) -> QuerySet[EmployeeProfi
             filters |= Q(company_id=assignment.company_id, department_id=assignment.department_id)
         elif assignment.scope == RoleAssignment.SCOPE_EMPLOYEE:
             filters |= Q(company_id=assignment.company_id, pk=assignment.employee_id)
-    return EmployeeProfile.objects.filter(filters, is_employee=True).distinct() if filters else (
+    return EmployeeProfile.objects.filter(filters, is_employee=True) if filters else (
         EmployeeProfile.objects.none()
     )
+
+
+def hr_operation_employees(context: AuthorizationContext) -> QuerySet[EmployeeProfile]:
+    """Return HR-assigned employees, or all employees for an explicitly authorized admin."""
+    if not getattr(context.user, "is_active", False):
+        return EmployeeProfile.objects.none()
+    if context.has_role(ADMIN):
+        return EmployeeProfile.objects.filter(is_employee=True)
+    return scoped_hr_employees(context)

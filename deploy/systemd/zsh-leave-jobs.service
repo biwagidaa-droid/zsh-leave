@@ -1,0 +1,19 @@
+[Unit]
+Description=ZSH Leave scheduled background jobs
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=zsh-leave
+Group=zsh-leave
+WorkingDirectory=/opt/zsh-leave/backend
+EnvironmentFile=/etc/zsh-leave/zsh-leave.env
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PATH=/opt/zsh-leave/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=/usr/bin/env python manage.py run_scheduled_jobs --settings=config.settings_prod
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict

@@ -117,8 +117,11 @@ class RBACPolicyTests(TestCase):
         assignment.company = self.company_a
         assignment.save()
         foreign_site_user = get_user_model().objects.create_user(username="foreign-site-record")
+        foreign_site = OrganizationSite.objects.create(
+            company=self.company_b, code="B2", name="Another B site",
+        )
         foreign_site_employee = EmployeeProfile.objects.create(
-            user=foreign_site_user, company=self.company_b, site=self.site_a,
+            user=foreign_site_user, company=self.company_b, site=foreign_site,
             personnel_code="B-2", start_date=dt.date(2020, 1, 1),
         )
         LeaveRequest.objects.create(
@@ -291,8 +294,6 @@ class RBACApiTests(TestCase):
     def test_manager_team_calendar_does_not_cross_company_even_with_forged_snapshot(self):
         self.employee_a.manager = self.manager
         self.employee_a.save(update_fields=["manager"])
-        self.employee_b.manager = self.manager
-        self.employee_b.save(update_fields=["manager"])
         leave_type = LeaveType.objects.create(key="annual", label_fa="Annual")
         for employee in (self.employee_a, self.employee_b):
             LeaveRequest.objects.create(

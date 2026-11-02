@@ -5,23 +5,21 @@ from django.contrib.auth import password_validation, update_session_auth_hash
 from django.core.exceptions import ValidationError
 from django.middleware.csrf import CsrfViewMiddleware, get_token
 from rest_framework import status
-from rest_framework.decorators import api_view, permission_classes, throttle_classes
+from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
-from rest_framework.throttling import AnonRateThrottle
 
+from . import audit_services
 from .authorization import authorization_context
-from .models import AuditEvent, EmployeeProfile
+from .invitation_services import account_access_allowed
+from .models import EmployeeProfile
+from .throttling import rate_limited
 
 logger = logging.getLogger("leave.auth")
 
 
-class LoginRateThrottle(AnonRateThrottle):
-    scope = "auth_login"
-
-
 def _record_auth_event(action, entity_id, actor=None, result="ok"):
-    AuditEvent.objects.create(
+    audit_services.record_audit(
         actor=actor,
         origin="auth",
         action=action,
@@ -94,9 +92,9 @@ def _invalid_request(fields):
     )
 
 
+@rate_limited("auth_login")
 @api_view(["POST"])
 @permission_classes([AllowAny])
-@throttle_classes([LoginRateThrottle])
 def login(request):
     csrf_response = _csrf_error(request)
     if csrf_response is not None:
@@ -110,7 +108,7 @@ def login(request):
         return _invalid_request({"credentials": "نام کاربری و رمز عبور الزامی است"})
 
     user = authenticate(request=request, username=username, password=password)
-    if user is None:
+    if user is None or not account_access_allowed(user):
         _record_auth_event("auth.login.failed", username, result="failed")
         logger.warning("Authentication failed")
         return Response(
@@ -153,6 +151,7 @@ def current_user(request):
     return Response(_user_payload(request.user))
 
 
+@rate_limited("password_operation")
 @api_view(["POST"])
 def change_password(request):
     csrf_response = _csrf_error(request)

@@ -7,12 +7,12 @@
 | ID | حوزه و معیار پذیرش قابل اثبات | وضعیت فعلی |
 |---|---|---|
 | SEC-01 | کلید `ZSH_SECRET_KEY` فقط از secret manager، >=۵۰ نویسه؛ production settings با کلید/host ناموجود fail-fast؛ هیچ secret در Git/Log نیست؛ scan گزارش پیوست دارد | نیازمند اجرای محیط؛ settings کد شرط کلید/host دارد، scan اجرا نشده |
-| SEC-02 | HTTPS-only، redirect/HSTS روی origin واقعی؛ Cookie session/CSRF امن و Secure در مرورگر؛ TLS scan پذیرفته | مسدود: گواهی، proxy و scan واقعی در مخزن نیست |
-| SEC-03 | CSRF برای همه mutationهای session-based تست شده؛ Origin/CSRF trusted دقیق و بدون wildcard تولید | پیاده‌سازی middleware؛ آزمون production proxy/Origin انجام نشده |
+| SEC-02 | HTTPS-only، redirect/HSTS روی origin واقعی؛ Cookie session/CSRF امن و Secure در مرورگر؛ TLS scan پذیرفته | تنظیمات و Django smoke tests برای trusted proxy/redirect/HSTS/cookie اضافه شد؛ مسدود برای گواهی، proxy و scan واقعی محیط |
+| SEC-03 | CSRF برای همه mutationهای session-based تست شده؛ Origin/CSRF trusted دقیق و بدون wildcard تولید | originهای دقیق HTTPS در production enforce و نمونه CSRF با trusted/untrusted origin آزموده شد؛ آزمون همه mutationها و origin واقعی staging باقی است |
 | SEC-04 | rate-limit login در edge+application، lockout/incident policy و audit failure؛ آزمون 429 مستند | throttle app و آزمون Django وجود دارد؛ edge/monitoring نامشخص |
 | SEC-05 | RBAC ماتریس endpoint×role اجرا؛ cross-company، IDOR، manager snapshot، self-escalation و HR scope همگی رد می‌شوند | آزمون Django بخشی موفق؛ اجرای کامل مستقل production-like و security review لازم |
 | SEC-06 | Canary در detail/calendar/notification/attachment/report/audit و export برای همه نقش غیرمجاز صفر بار دیده شود | helper tests و بخشی API tests وجود دارد؛ کل مسیرها/محیط واقعی اثبات نشده |
-| SEC-07 | File upload محدود به ۱۰ MiB، نوع/امضا verify، private storage، malware scan، retention و restore آزمون‌پذیر | اعتبارسنج API وجود دارد؛ private storage/virus scan/backup نامشخص |
+| SEC-07 | File upload محدود به ۱۰ MiB، PDF/PNG/JPEG با parser، storage خصوصی، دسترسی download scoped، malware scan یا unscanned state، retention و restore آزمون‌پذیر | تست Django برای validation، cross-company/employee access، headers، scanner-unavailable، orphan cleanup و retention/legal hold اضافه شد؛ migration `0019` فایل‌های legacy را کپی و hash-check می‌کند. Scanner واقعی، تنظیم volume/backup و restore در deployment هنوز تأیید نشده؛ سیاست ۲ ماه باید HR/Legal تصویب کند. |
 | DB-01 | PostgreSQL نسخه مصوب، TLS/credential least privilege، backup و اتصال production؛ health/readiness و query check پایدار | تنظیمات prod PostgreSQL است؛ سرویس/نسخه/اتصال deployment اثبات نشده |
 | DB-02 | همه migrations ۰۰۰۱–۰۰۱۱ روی snapshot نزدیک تولید بدون drift، lock plan و rollback/forward plan اجرا شود | SQLite suite موفق؛ PostgreSQL migration rollout در این اجرا نشده |
 | DB-03 | `makemigrations --check --dry-run` خروجی بدون تغییر؛ release migrationها در staging اجرا و audit شود | در این workspace با `settings_test` اجرا شد: `No changes detected`; PostgreSQL/staging rollout هنوز انجام نشده |
@@ -31,7 +31,7 @@
 | CFG-02 | تنظیمات dev هرگز در production؛ DEBUG false، allowed hosts دقیق، CSRF origins دقیق، secret rotation runbook | كد production checks دارد؛ process/rotation نامشخص |
 | CFG-03 | تنظیمات DB مستند و با `.env.example` هماهنگ؛ اتصال اشتباه fail-fast | `ZSH_DB_ENGINE` در settings پایه و `.env.example` مصرف می‌شود؛ `ZSH_USE_SQLITE=1` override اضافی توسعه است. dotenv خودکار بارگذاری نمی‌شود و مقادیر عملیاتی باید در محیط process تعریف شوند |
 | DEP-01 | manifest deploy، pinned runtime/dependency، static/media persistence، health probes و rollout/rollback تأییدشده | مسدود: Docker/Compose/CI/CD/deploy manifest یافت نشد |
-| DEP-02 | TLS، DNS، reverse proxy header، timeout/body limit و static/media route در staging آزموده | مسدود تا زیرساخت مشخص شود |
+| DEP-02 | TLS، DNS، reverse proxy header، timeout/body limit و static/media route در staging آزموده | topology/proxy واقعی در مخزن نیست؛ الگوی امن header، آزمون Django و smoke commands اضافه شد. انتخاب proxy/TLS، بستن direct upstream و آزمون staging هنوز مسدودند |
 | OPS-01 | `pg_dump` رمزگذاری‌شده، retention/immutability، فایل پیوست همراه DB؛ زمان آخرین backup و alert قابل مشاهده | انجام‌نشده: ابزار/job/سیاست repo ندارد |
 | OPS-02 | restore drill روی محیط جدا؛ DB و فایل پیوست restore و تعداد رکورد/ledger reconciliation برابر با baseline | انجام‌نشده؛ گزارش restore موجود نیست |
 | OPS-03 | مانیتورینگ DB، 5xx، 401/403/429، ظرفیت disk/media، backup و job؛ آستانه و on-call ثبت شود | مسدود: monitoring/alerting تعریف نشده؛ jobs endpoint خالی |

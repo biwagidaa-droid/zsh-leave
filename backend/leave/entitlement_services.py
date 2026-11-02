@@ -11,8 +11,8 @@ from django.db.models import Sum
 from zsh_core.balance import RequestLine, allocate_by_year, compute_carry_over
 from zsh_core.policy import leave_year_of
 from zsh_core.settings_schema import build_policy
+from . import audit_services
 from .models import (
-    AuditEvent,
     EntitlementEvent,
     LeaveEntitlement,
     LeaveRequest,
@@ -60,6 +60,10 @@ def _validate_key(key: str) -> str:
 def _event_key(entitlement_id: int, key: str) -> str:
     value = f"{entitlement_id}:{_validate_key(key)}".encode("utf-8")
     return hashlib.sha256(value).hexdigest()
+
+
+def entitlement_event_idempotency_key(entitlement_id: int, key: str) -> str:
+    return _event_key(entitlement_id, key)
 
 
 def _sum_events(entitlement_id: int, request_id: int | None = None) -> dict[str, Decimal]:
@@ -125,9 +129,7 @@ def _append_event(
 ) -> EntitlementEvent:
     deltas = {field: _decimal((deltas or {}).get(field, ZERO)) for field in _DELTA_FIELDS}
     event_key = _event_key(entitlement.pk, key)
-    safe_reason = (
-        "" if request is not None and request.leave_type.confidential else reason
-    )
+    safe_reason = "" if request is not None else reason
     existing = EntitlementEvent.objects.filter(idempotency_key=event_key).first()
     if existing is not None:
         same = (
@@ -172,14 +174,28 @@ def _append_event(
         reversal_of=reversal_of,
         **deltas,
     )
-    AuditEvent.objects.create(
+    audit_before = {
+        **event.before,
+        "entitlementId": entitlement.pk,
+        "employeeId": entitlement.employee_id,
+        "leaveTypeId": entitlement.leave_type_id,
+        "year": entitlement.year,
+    }
+    audit_after = {
+        **event.after,
+        "entitlementId": entitlement.pk,
+        "employeeId": entitlement.employee_id,
+        "leaveTypeId": entitlement.leave_type_id,
+        "year": entitlement.year,
+    }
+    audit_services.record_audit(
         actor=actor,
         origin="system" if actor is None else "user",
         action=f"entitlement.{kind}",
         entity="EntitlementEvent",
-        entity_id=str(event.pk),
-        before=event.before,
-        after=event.after,
+        entity_id=event.pk,
+        before=audit_before,
+        after=audit_after,
         reason=safe_reason,
     )
     allocation_updates = {}
@@ -260,6 +276,58 @@ def create_entitlement(
     reason: str,
     idempotency_key: str,
 ) -> LeaveEntitlement:
+    return _create_entitlement(
+        employee=employee,
+        leave_type=leave_type,
+        year=year,
+        base_days=base_days,
+        carry_over_days=carry_over_days,
+        manual_adjustment=manual_adjustment,
+        actor=actor,
+        reason=reason,
+        idempotency_key=idempotency_key,
+        reject_existing=False,
+    )
+
+
+@transaction.atomic
+def create_entitlement_for_import(
+    *,
+    employee,
+    leave_type,
+    year: int,
+    base_days,
+    actor=None,
+    reason: str,
+    idempotency_key: str,
+) -> LeaveEntitlement:
+    return _create_entitlement(
+        employee=employee,
+        leave_type=leave_type,
+        year=year,
+        base_days=base_days,
+        carry_over_days=ZERO,
+        manual_adjustment=ZERO,
+        actor=actor,
+        reason=reason,
+        idempotency_key=idempotency_key,
+        reject_existing=True,
+    )
+
+
+def _create_entitlement(
+    *,
+    employee,
+    leave_type,
+    year: int,
+    base_days,
+    carry_over_days,
+    manual_adjustment,
+    actor,
+    reason: str,
+    idempotency_key: str,
+    reject_existing: bool,
+) -> LeaveEntitlement:
     _validate_key(idempotency_key)
     if not (reason or "").strip():
         raise EntitlementLedgerError("دلیل ایجاد سهمیه الزامی است")
@@ -286,6 +354,8 @@ def create_entitlement(
         ).first()
         if entitlement is None:
             raise
+        if reject_existing:
+            raise EntitlementConflict("برای این کارمند/نوع/سال قبلاً سهمیه ثبت شده است")
         balance = entitlement_balance(entitlement)
         if (
             balance["total"] == sum(amounts.values(), ZERO)

@@ -1,15 +1,16 @@
 from __future__ import annotations
 
-import csv
 import datetime as dt
-import io
+import logging
 from decimal import Decimal, InvalidOperation
 from uuid import uuid4
 
 from django.contrib.auth import get_user_model
-from django.core.exceptions import ValidationError
+from django.core.exceptions import PermissionDenied, ValidationError
+from django.core.files.base import ContentFile
 from django.db import IntegrityError, transaction
-from django.db.models import Count, Q
+from django.db.models import CharField, Count, ProtectedError, Q
+from django.db.models.functions import Cast
 from django.http import FileResponse, Http404
 from django.utils import timezone
 from rest_framework.decorators import api_view
@@ -18,33 +19,64 @@ from rest_framework.response import Response
 from zsh_core import settings_schema
 from zsh_core.permissions import HR as POLICY_HR, Viewer, visible_balance_types
 from . import admin_services
+from . import audit_services
+from . import bradford_services
+from .attachment_security import (
+    AttachmentScannerUnavailable,
+    InvalidAttachment,
+    validate_attachment,
+)
 from .authorization import (
-    authorization_context, scoped_employees, scoped_hr_employees, scoped_hr_leave_requests,
+    MANAGE_GLOBAL_LEAVE_TYPES, authorization_context, has_permission, hr_operation_employees,
+    scoped_employees, scoped_hr_employees, scoped_hr_leave_requests,
 )
 from .entitlement_services import (
+    EntitlementConflict,
     EntitlementLedgerError,
     adjust_entitlement,
     create_entitlement,
+    create_entitlement_for_import,
     entitlement_balance,
 )
+from .entitlement_import_services import validate_entitlement_import
+from .employment_services import (
+    employees_employed_on,
+    employment_status_history,
+    is_employed_on,
+    organization_localdate,
+)
+from .invitation_services import (
+    InvitationError,
+    invite_employee,
+    normalize_email,
+    synchronize_employment_access,
+)
+from .hierarchy_services import lock_organizational_hierarchy
 from .models import (
     AuditEvent,
     BradfordNote,
     Company,
     ContractPeriod,
     Department,
+    EmployeeInvitation,
+    EntitlementEvent,
     EmployeeProfile,
     LeaveEntitlement,
     LeaveRequestAttachment,
     LeaveRequest,
+    LeaveRequestComment,
     LeaveRequestEvent,
     LeaveType,
     NotificationRead,
+    OrganizationSite,
     RoleAssignment,
     SystemSetting,
+    attachment_upload_path,
 )
+from .throttling import rate_limited
 
 User = get_user_model()
+logger = logging.getLogger(__name__)
 
 
 def _failure(code: str, message: str, status: int, fields: dict | None = None) -> Response:
@@ -71,11 +103,32 @@ def _hr(context, employee: EmployeeProfile) -> bool:
 
 def _employee_rows(context):
     rows = EmployeeProfile.objects.select_related(
-        "user", "company", "department", "manager__user",
+        "user", "company", "site", "department", "manager__user",
     ).filter(is_employee=True)
     if _admin(context):
         return rows
     return rows.filter(pk__in=scoped_employees(context).values("pk"))
+
+
+def _site_rows(context):
+    if _admin(context):
+        return OrganizationSite.objects.all()
+
+    filters = Q(pk__in=_employee_rows(context).exclude(site_id=None).values("site_id"))
+    for assignment in context.assignments:
+        if assignment.role != "hr":
+            continue
+        if assignment.scope == RoleAssignment.SCOPE_COMPANY:
+            filters |= Q(company_id=assignment.company_id)
+        elif assignment.scope == RoleAssignment.SCOPE_SITE:
+            filters |= Q(pk=assignment.site_id)
+    return OrganizationSite.objects.filter(filters)
+
+
+def _can_manage_company_sites(context, company_id: int) -> bool:
+    return _admin(context) or context.has_scope(
+        "hr", company_id=company_id, site_id=None, department_id=None, employee_id=None,
+    )
 
 
 def _employee_json(employee: EmployeeProfile) -> dict:
@@ -86,6 +139,8 @@ def _employee_json(employee: EmployeeProfile) -> dict:
         "personnelCode": employee.personnel_code,
         "companyId": employee.company_id,
         "companyName": employee.company.name,
+        "siteId": employee.site_id,
+        "siteName": employee.site.name if employee.site_id else None,
         "departmentName": employee.department.name if employee.department_id else "",
         "positionName": "",
         "managerName": (
@@ -94,7 +149,8 @@ def _employee_json(employee: EmployeeProfile) -> dict:
         ),
         "startDate": employee.start_date.isoformat(),
         "endDate": employee.end_date.isoformat() if employee.end_date else None,
-        "isActive": employee.end_date is None,
+        "isActive": is_employed_on(employee),
+        "accountStatus": employee.account_status,
     }
 
 
@@ -152,39 +208,34 @@ def leave_types(request, type_id: int | None = None):
     context = _context(request)
     if request.method == "GET":
         rows = LeaveType.objects.all()
-        if not (context.has_role("hr") or _admin(context)):
+        if context.has_role("hr") and not has_permission(context, MANAGE_GLOBAL_LEAVE_TYPES):
+            rows = rows.filter(enabled=True)
+        elif not has_permission(context, MANAGE_GLOBAL_LEAVE_TYPES):
             rows = rows.filter(enabled=True, employee_requestable=True)
         return Response([_leave_type_json(item) for item in rows.order_by("sort_order", "pk")])
 
-    if not (context.has_role("hr") or _admin(context)):
+    if not has_permission(context, MANAGE_GLOBAL_LEAVE_TYPES):
         return _failure("permission_denied", "مدیریت انواع مرخصی مجاز نیست", 403)
     data = request.data
     allowed = {
         "key", "labelFa", "color", "countsAgainstBalance", "requiresApproval", "requiresNote",
         "requiresReplacement", "employeeRequestable", "confidential", "enabled", "sortOrder",
+        "reason",
     }
     if not isinstance(data, dict) or not data or set(data) - allowed:
         return _failure("invalid_payload", "فیلدهای نوع مرخصی معتبر نیست", 400)
     try:
-        item = LeaveType.objects.get(pk=type_id) if type_id is not None else LeaveType()
+        item = admin_services.save_leave_type(
+            actor=request.user,
+            leave_type_id=type_id,
+            data=data,
+            reason=data.get("reason", ""),
+            correlation_id=request.headers.get("X-Correlation-ID", ""),
+        )
     except LeaveType.DoesNotExist:
         raise Http404
-    mapping = {
-        "labelFa": "label_fa", "countsAgainstBalance": "counts_against_balance",
-        "requiresApproval": "requires_approval", "requiresNote": "requires_note",
-        "requiresReplacement": "requires_replacement", "employeeRequestable": "employee_requestable",
-        "confidential": "confidential", "enabled": "enabled", "sortOrder": "sort_order",
-    }
-    for api_key, model_key in mapping.items():
-        if api_key in data:
-            setattr(item, model_key, data[api_key])
-    if "key" in data:
-        item.key = data["key"]
-    if "color" in data:
-        item.color = data["color"]
-    try:
-        item.full_clean()
-        item.save()
+    except PermissionDenied:
+        return _failure("permission_denied", "مدیریت انواع مرخصی مجاز نیست", 403)
     except (ValidationError, IntegrityError, TypeError, ValueError):
         return _failure("invalid_leave_type", "اطلاعات نوع مرخصی معتبر نیست", 400)
     return Response(_leave_type_json(item), status=201 if type_id is None else 200)
@@ -246,7 +297,7 @@ def entitlement_adjustment(request, entitlement_id: int):
     if not isinstance(data, dict) or set(data) != {"days", "reason"}:
         return _failure("invalid_payload", "روز و دلیل الزامی است", 400)
     item = LeaveEntitlement.objects.select_related("employee").filter(pk=entitlement_id).first()
-    if item is None or item.employee_id not in _employee_rows(context).values("pk"):
+    if item is None or not hr_operation_employees(context).filter(pk=item.employee_id).exists():
         raise Http404
     try:
         event = adjust_entitlement(
@@ -260,52 +311,7 @@ def entitlement_adjustment(request, entitlement_id: int):
     return Response(_entitlement_json(item))
 
 
-def _import_preview(csv_text: str, context) -> tuple[dict, list[tuple]]:
-    try:
-        reader = csv.DictReader(io.StringIO(csv_text))
-        required = {"personnel_code", "type", "year", "days"}
-        if not reader.fieldnames or not required.issubset(reader.fieldnames):
-            return {
-                "dryRun": True,
-                "rows": [{
-                    "line": 1, "employee": "", "type": "", "year": 0,
-                    "days": "", "ok": False,
-                    "error": "سرستون‌های personnel_code,type,year,days الزامی هستند",
-                }],
-                "accepted": 0, "rejected": 1,
-            }, []
-        parsed = []
-        rows = []
-        employees = {e.personnel_code: e for e in _employee_rows(context).select_related("user", "company")}
-        types = {t.key: t for t in LeaveType.objects.filter(enabled=True)}
-        for line, raw in enumerate(reader, 2):
-            code, key = (raw.get("personnel_code") or "").strip(), (raw.get("type") or "").strip()
-            try:
-                row_year = int(raw.get("year", ""))
-                days = Decimal((raw.get("days") or "").strip())
-                if not days.is_finite() or days <= 0 or days * 10 != (days * 10).to_integral_value():
-                    raise ValueError
-                employee, leave_type = employees.get(code), types.get(key)
-                if not employee or not leave_type:
-                    raise ValueError
-                if LeaveEntitlement.objects.filter(employee=employee, leave_type=leave_type, year=row_year).exists():
-                    raise ValueError
-                parsed.append((line, employee, leave_type, row_year, days))
-                rows.append({"line": line, "employee": employee.user.get_full_name() or employee.user.username,
-                             "type": leave_type.key, "year": row_year, "days": str(days), "ok": True})
-            except (ValueError, TypeError, InvalidOperation):
-                rows.append({"line": line, "employee": code, "type": key, "year": 0,
-                             "days": raw.get("days", ""), "ok": False,
-                             "error": "اطلاعات یا دسترسی این ردیف معتبر نیست"})
-        return {
-            "dryRun": True, "rows": rows,
-            "accepted": sum(row["ok"] for row in rows),
-            "rejected": sum(not row["ok"] for row in rows),
-        }, parsed
-    except csv.Error:
-        return {"dryRun": True, "rows": [], "accepted": 0, "rejected": 1}, []
-
-
+@rate_limited("bulk_import")
 @api_view(["POST"])
 def entitlement_import(request):
     context = _context(request)
@@ -315,27 +321,101 @@ def entitlement_import(request):
     if not isinstance(data, dict) or set(data) != {"csv"} or not isinstance(data["csv"], str):
         return _failure("invalid_payload", "متن CSV الزامی است", 400)
     dry_run = request.query_params.get("dry_run") == "1"
-    preview, valid = _import_preview(data["csv"], context)
-    preview["dryRun"] = dry_run
-    if not dry_run and preview["rejected"] == 0:
-        try:
-            with transaction.atomic():
-                for line, employee, leave_type, year, days in valid:
-                    create_entitlement(
-                        employee=employee, leave_type=leave_type, year=year, base_days=days,
-                        actor=request.user, reason="ورود گروهی سهمیه",
+    validation = validate_entitlement_import(data["csv"], context)
+    if dry_run:
+        validation.preview["dryRun"] = True
+        return Response(validation.preview)
+
+    conflict_line = None
+    try:
+        with transaction.atomic():
+            current_context = _context(request)
+            if not (current_context.has_role("hr") or _admin(current_context)):
+                return _failure("permission_denied", "ورود گروهی سهمیه مجاز نیست", 403)
+
+            employee_ids = {employee.pk for _, employee, _, _, _ in validation.valid_rows}
+            leave_type_ids = {leave_type.pk for _, _, leave_type, _, _ in validation.valid_rows}
+            locked_employee_ids = set(
+                hr_operation_employees(current_context).filter(
+                    pk__in=employee_ids,
+                ).select_for_update().order_by("pk").values_list("pk", flat=True)
+            )
+            locked_leave_type_ids = set(
+                LeaveType.objects.filter(
+                    pk__in=leave_type_ids, enabled=True,
+                ).select_for_update().order_by("pk").values_list("pk", flat=True)
+            )
+
+            current_validation = validate_entitlement_import(data["csv"], current_context)
+            preview = current_validation.preview
+            valid = current_validation.valid_rows
+            fresh_employee_ids = {employee.pk for _, employee, _, _, _ in valid}
+            fresh_leave_type_ids = {leave_type.pk for _, _, leave_type, _, _ in valid}
+            if not fresh_employee_ids.issubset(locked_employee_ids):
+                preview["rows"].append({
+                    "line": 1, "employee": "", "type": "", "year": 0, "days": "",
+                    "ok": False, "errorCode": "stale_employee_scope",
+                    "error": "محدوده دسترسی کارمند هنگام ثبت تغییر کرده است",
+                })
+                preview["rejected"] += 1
+            if not fresh_leave_type_ids.issubset(locked_leave_type_ids):
+                preview["rows"].append({
+                    "line": 1, "employee": "", "type": "", "year": 0, "days": "",
+                    "ok": False, "errorCode": "stale_leave_type",
+                    "error": "وضعیت نوع مرخصی هنگام ثبت تغییر کرده است",
+                })
+                preview["rejected"] += 1
+            if preview["rejected"]:
+                preview["dryRun"] = False
+                return Response(preview)
+
+            for line, employee, leave_type, year, days in valid:
+                try:
+                    create_entitlement_for_import(
+                        employee=employee,
+                        leave_type=leave_type,
+                        year=year,
+                        base_days=days,
+                        actor=request.user,
+                        reason="ورود گروهی سهمیه",
                         idempotency_key=f"import:{request.user.pk}:{uuid4()}:{line}",
                     )
-        except (EntitlementLedgerError, IntegrityError) as exc:
-            return _failure("entitlement_import_failed", str(exc), 409)
+                except EntitlementConflict:
+                    conflict_line = line
+                    raise
+    except EntitlementConflict:
+        return Response({
+            "dryRun": False,
+            "rows": [{
+                "line": conflict_line,
+                "employee": "",
+                "type": "",
+                "year": 0,
+                "days": "",
+                "ok": False,
+                "errorCode": "duplicate_existing",
+                "error": "سهمیه این کارمند، نوع مرخصی و سال هم‌زمان ثبت شده است",
+            }],
+            "accepted": 0,
+            "rejected": 1,
+        }, status=409)
+    except (EntitlementLedgerError, IntegrityError) as exc:
+        return _failure("entitlement_import_failed", str(exc), 409)
+    preview["dryRun"] = False
     return Response(preview)
 
 
+@rate_limited("employee_search")
 @api_view(["GET", "POST", "PATCH"])
 def employees(request, employee_id: int | None = None):
     context = _context(request)
     rows = _employee_rows(context)
     if request.method == "GET":
+        if employee_id is not None:
+            employee = rows.filter(pk=employee_id).first()
+            if employee is None:
+                raise Http404
+            return Response(_employee_json(employee))
         query = request.query_params.get("q", "").strip()
         if query:
             rows = rows.filter(
@@ -349,25 +429,46 @@ def employees(request, employee_id: int | None = None):
     if not isinstance(data, dict):
         return _failure("invalid_payload", "بدنه باید یک شیء JSON باشد", 400)
     try:
-        employee = rows.get(pk=employee_id) if employee_id is not None else None
+        employee = hr_operation_employees(context).get(pk=employee_id) if employee_id is not None else None
     except EmployeeProfile.DoesNotExist:
         raise Http404
-    allowed = {"displayName", "personnelCode", "companyId", "departmentId", "managerId", "startDate", "endDate"}
+    allowed = {
+        "displayName", "personnelCode", "companyId", "siteId", "departmentId", "managerId",
+        "startDate", "endDate", "email",
+    }
     if set(data) - allowed or not {"displayName", "personnelCode", "companyId"}.issubset(data):
         return _failure("invalid_payload", "نام، کد پرسنلی و شرکت الزامی است", 400)
+    if employee is not None and "email" in data:
+        return _failure("invalid_payload", "برای تغییر ایمیل از فرایند دعوت استفاده کنید", 400)
+    invitation_email = None
+    if "email" in data:
+        try:
+            invitation_email = normalize_email(data["email"])
+        except InvitationError:
+            return _failure("invalid_employee", "نشانی ایمیل معتبر نیست", 400)
     if not isinstance(data["displayName"], str) or not isinstance(data["personnelCode"], str):
         return _failure("invalid_payload", "نام و کد پرسنلی باید متن باشند", 400)
     try:
         company = Company.objects.get(pk=data["companyId"])
         department_id = int(data["departmentId"]) if data.get("departmentId") else None
-        if not _admin(context) and not context.has_scope(
-            "hr", company_id=company.pk, site_id=None, department_id=department_id, employee_id=None,
-        ):
-            return _failure("permission_denied", "ثبت در این شرکت یا واحد مجاز نیست", 403)
         department = Department.objects.get(pk=data["departmentId"]) if data.get("departmentId") else None
-        manager = EmployeeProfile.objects.get(pk=data["managerId"]) if data.get("managerId") else None
+        if data.get("siteId") is not None:
+            if isinstance(data["siteId"], bool):
+                raise ValueError("siteId باید شناسه معتبر باشد")
+            site = OrganizationSite.objects.get(pk=int(data["siteId"]))
+        else:
+            site = employee.site if employee is not None and "siteId" not in data else None
+        if not _admin(context) and not context.has_scope(
+            "hr", company_id=company.pk, site_id=site.pk if site else None,
+            department_id=department_id, employee_id=None,
+        ):
+            return _failure("permission_denied", "ثبت در این شرکت یا محدوده سازمانی مجاز نیست", 403)
+        manager = (
+            hr_operation_employees(context).get(pk=data["managerId"])
+            if data.get("managerId") else None
+        )
         start = dt.date.fromisoformat(data["startDate"]) if data.get("startDate") else (
-            employee.start_date if employee else timezone.localdate()
+            employee.start_date if employee else organization_localdate()
         )
         end = dt.date.fromisoformat(data["endDate"]) if data.get("endDate") else (
             employee.end_date if employee else None
@@ -376,41 +477,106 @@ def employees(request, employee_id: int | None = None):
         code = data["personnelCode"].strip()
         if not display_name or not code:
             raise ValueError("نام و کد پرسنلی الزامی است")
+        created = employee is None
         with transaction.atomic():
+            if employee is not None:
+                employee = hr_operation_employees(context).select_for_update().get(pk=employee.pk)
+                before = audit_services.snapshot(employee)
+            else:
+                before = None
             if employee is None:
                 username = f"emp-{company.pk}-{code}"
                 if User.objects.filter(username=username).exists():
                     return _failure("duplicate_user", "حساب کاربری با این کد وجود دارد", 409)
-                user = User(username=username, first_name=display_name)
+                user = User(
+                    username=username,
+                    first_name=display_name,
+                    email=invitation_email or "",
+                    is_active=False,
+                )
                 user.set_unusable_password()
                 user.save()
                 employee = EmployeeProfile(
                     user=user, company=company, personnel_code=code, start_date=start,
+                    account_status=EmployeeProfile.ACCOUNT_CREATED,
                 )
             else:
                 user = employee.user
+                display_name_changed = user.first_name != display_name
                 user.first_name = display_name
                 user.save(update_fields=["first_name"])
                 employee.company, employee.personnel_code = company, code
                 employee.start_date = start
-            employee.department, employee.manager, employee.end_date = department, manager, end
+            employee.site, employee.department, employee.manager, employee.end_date = (
+                site, department, manager, end,
+            )
             if department and department.company_id != company.pk:
                 raise ValueError("واحد باید متعلق به شرکت انتخاب‌شده باشد")
             if manager and manager.company_id != company.pk:
                 raise ValueError("مدیر باید متعلق به شرکت انتخاب‌شده باشد")
             employee.full_clean()
             employee.save()
-    except (Company.DoesNotExist, Department.DoesNotExist, EmployeeProfile.DoesNotExist):
-        return _failure("related_object_not_found", "شرکت، واحد یا مدیر پیدا نشد", 404)
+            synchronize_employment_access(employee=employee, actor=request.user)
+            after = audit_services.snapshot(employee)
+            if not created:
+                after["displayNameChanged"] = display_name_changed
+            audit_services.record_audit(
+                actor=request.user,
+                origin="admin" if _admin(context) else "hr",
+                action="employee.create" if created else "employee.update",
+                entity="EmployeeProfile",
+                entity_id=employee.pk,
+                before=before,
+                after=after,
+            )
+    except (
+        Company.DoesNotExist, Department.DoesNotExist, OrganizationSite.DoesNotExist,
+        EmployeeProfile.DoesNotExist,
+    ):
+        return _failure("related_object_not_found", "شرکت، سایت، واحد یا مدیر پیدا نشد", 404)
     except (ValueError, TypeError, ValidationError) as exc:
         return _failure("invalid_employee", str(exc), 400)
     except IntegrityError:
         return _failure("duplicate_employee", "کد پرسنلی قبلاً در این شرکت ثبت شده است", 409)
-    return Response(_employee_json(employee), status=201 if employee_id is None else 200)
+    invitation_result = None
+    if (
+        created
+        and invitation_email
+        and employee.account_status != EmployeeProfile.ACCOUNT_OFFBOARDED
+    ):
+        try:
+            invitation_result = invite_employee(
+                employee_id=employee.pk,
+                actor=request.user,
+            )
+        except InvitationError:
+            return _failure("invitation_failed", "دعوت کاربر ایجاد نشد", 500)
+        employee.refresh_from_db()
+    result = _employee_json(employee)
+    if invitation_result:
+        result["invitationStatus"] = invitation_result.status
+        result["invitationDelivery"] = (
+            "sent" if invitation_result.status == "sent" else "unavailable"
+        )
+        result["invitationMessageFa"] = (
+            "دعوت ارسال شد"
+            if invitation_result.status == "sent"
+            else "دعوت ذخیره شد اما سرویس ایمیل در دسترس نیست"
+        )
+        if invitation_result.development_url:
+            result["developmentActivationUrl"] = invitation_result.development_url
+    return Response(result, status=201 if employee_id is None else 200)
 
 
 def _company_json(item: Company) -> dict:
     return {"id": item.pk, "code": item.code, "name": item.name, "isActive": item.is_active}
+
+
+def _site_json(item: OrganizationSite) -> dict:
+    return {
+        "id": item.pk, "companyId": item.company_id, "code": item.code,
+        "name": item.name, "isActive": item.is_active,
+    }
 
 
 def _department_json(item: Department) -> dict:
@@ -435,18 +601,132 @@ def companies(request, company_id: int | None = None):
     if (not isinstance(data["code"], str) or not isinstance(data["name"], str)
             or ("isActive" in data and not isinstance(data["isActive"], bool))):
         return _failure("invalid_payload", "کد و نام باید متن و وضعیت باید بولی باشد", 400)
-    item = Company.objects.filter(pk=company_id).first() if company_id else Company()
-    if item is None:
-        raise Http404
-    item.code, item.name = data["code"].strip(), data["name"].strip()
-    if "isActive" in data:
-        item.is_active = data["isActive"]
     try:
-        item.full_clean()
-        item.save()
+        with transaction.atomic():
+            item = (
+                Company.objects.select_for_update().filter(pk=company_id).first()
+                if company_id else Company()
+            )
+            if item is None:
+                raise Http404
+            before = audit_services.snapshot(item) if item.pk is not None else None
+            item.code, item.name = data["code"].strip(), data["name"].strip()
+            if "isActive" in data:
+                item.is_active = data["isActive"]
+            item.full_clean()
+            item.save()
+            audit_services.record_model_change(
+                actor=request.user,
+                origin="admin",
+                action="company.create" if before is None else "company.update",
+                instance=item,
+                before=before,
+            )
+    except Http404:
+        raise
     except (ValidationError, IntegrityError):
         return _failure("invalid_company", "اطلاعات شرکت معتبر نیست", 400)
     return Response(_company_json(item), status=201 if company_id is None else 200)
+
+
+@api_view(["GET", "POST", "PATCH", "DELETE"])
+def sites(request, site_id: int | None = None):
+    context = _context(request)
+    if request.method == "GET":
+        rows = _site_rows(context)
+        if site_id is not None:
+            item = rows.filter(pk=site_id).first()
+            if item is None:
+                raise Http404
+            return Response(_site_json(item))
+        return Response([_site_json(item) for item in rows.order_by("company_id", "name")])
+
+    if request.method == "DELETE":
+        if site_id is None:
+            return _failure("invalid_site", "برای حذف باید شناسه سایت مشخص باشد", 400)
+        try:
+            with transaction.atomic():
+                lock_organizational_hierarchy()
+                item = _site_rows(context).select_for_update().filter(pk=site_id).first()
+                if item is None:
+                    raise Http404
+                if not _can_manage_company_sites(context, item.company_id):
+                    return _failure("permission_denied", "مدیریت سایت‌های این شرکت مجاز نیست", 403)
+                before = audit_services.snapshot(item)
+                deleted_site_id = item.pk
+                item.delete()
+                audit_services.record_audit(
+                    actor=request.user,
+                    origin="admin" if _admin(context) else "hr",
+                    action="organization_site.delete",
+                    entity="OrganizationSite",
+                    entity_id=deleted_site_id,
+                    before=before,
+                )
+        except Http404:
+            raise
+        except ProtectedError:
+            return _failure(
+                "site_in_use", "سایتی که سوابق سازمانی به آن ارجاع دارند قابل حذف نیست", 409,
+            )
+        return Response(status=204)
+
+    data = request.data
+    allowed = {"companyId", "code", "name", "isActive"}
+    if not isinstance(data, dict) or set(data) - allowed or not {"companyId", "code", "name"} <= set(data):
+        return _failure("invalid_payload", "شرکت، کد و نام سایت الزامی است", 400)
+    if (
+        not isinstance(data["code"], str) or not isinstance(data["name"], str)
+        or ("isActive" in data and not isinstance(data["isActive"], bool))
+    ):
+        return _failure("invalid_payload", "کد و نام باید متن و وضعیت باید بولی باشد", 400)
+    try:
+        with transaction.atomic():
+            lock_organizational_hierarchy()
+            item = None
+            if site_id is not None:
+                item = _site_rows(context).select_for_update().filter(pk=site_id).first()
+                if item is None:
+                    raise Http404
+                if not _can_manage_company_sites(context, item.company_id):
+                    return _failure(
+                        "permission_denied", "مدیریت سایت‌های این شرکت مجاز نیست", 403,
+                    )
+
+            company = Company.objects.get(pk=data["companyId"])
+            if not _can_manage_company_sites(context, company.pk):
+                return _failure(
+                    "permission_denied", "ساخت یا انتقال سایت به این شرکت مجاز نیست", 403,
+                )
+            if item is not None and item.company_id != company.pk:
+                if not _admin(context):
+                    return _failure(
+                        "permission_denied", "انتقال سایت به شرکت دیگر مجاز نیست", 403,
+                    )
+
+            item = item or OrganizationSite()
+            before = audit_services.snapshot(item) if item.pk is not None else None
+            item.company = company
+            item.code = data["code"].strip()
+            item.name = data["name"].strip()
+            if "isActive" in data:
+                item.is_active = data["isActive"]
+            item.full_clean()
+            item.save()
+            audit_services.record_model_change(
+                actor=request.user,
+                origin="admin" if _admin(context) else "hr",
+                action="organization_site.create" if before is None else "organization_site.update",
+                instance=item,
+                before=before,
+            )
+    except Http404:
+        raise
+    except Company.DoesNotExist:
+        return _failure("related_object_not_found", "شرکت پیدا نشد", 404)
+    except (ValidationError, IntegrityError):
+        return _failure("invalid_site", "اطلاعات سایت معتبر نیست", 400)
+    return Response(_site_json(item), status=201 if site_id is None else 200)
 
 
 @api_view(["GET", "POST", "PATCH"])
@@ -466,17 +746,31 @@ def departments(request, department_id: int | None = None):
         return _failure("invalid_payload", "کد، نام و شرکت الزامی است", 400)
     if not isinstance(data["code"], str) or not isinstance(data["name"], str):
         return _failure("invalid_payload", "کد و نام باید متن باشند", 400)
-    item = Department.objects.filter(pk=department_id).first() if department_id else Department()
-    if item is None:
-        raise Http404
     try:
-        item.company = Company.objects.get(pk=data["companyId"])
-        item.code, item.name = data["code"].strip(), data["name"].strip()
-        item.parent = Department.objects.get(pk=data["parentId"]) if data.get("parentId") else None
-        item.full_clean()
-        item.save()
+        with transaction.atomic():
+            item = (
+                Department.objects.select_for_update().filter(pk=department_id).first()
+                if department_id else Department()
+            )
+            if item is None:
+                raise Http404
+            before = audit_services.snapshot(item) if item.pk is not None else None
+            item.company = Company.objects.get(pk=data["companyId"])
+            item.code, item.name = data["code"].strip(), data["name"].strip()
+            item.parent = Department.objects.get(pk=data["parentId"]) if data.get("parentId") else None
+            item.full_clean()
+            item.save()
+            audit_services.record_model_change(
+                actor=request.user,
+                origin="admin",
+                action="department.create" if before is None else "department.update",
+                instance=item,
+                before=before,
+            )
     except (Company.DoesNotExist, Department.DoesNotExist):
         return _failure("related_object_not_found", "شرکت یا واحد والد پیدا نشد", 404)
+    except Http404:
+        raise
     except (ValidationError, IntegrityError):
         return _failure("invalid_department", "اطلاعات واحد معتبر نیست", 400)
     return Response(_department_json(item), status=201 if department_id is None else 200)
@@ -517,19 +811,60 @@ def settings_api(request):
 @api_view(["GET"])
 def audit_events(request):
     context = _context(request)
-    if _admin(context):
+    is_admin = _admin(context)
+    if is_admin:
         rows = AuditEvent.objects.all()
     elif context.has_role("hr"):
-        request_ids = scoped_hr_leave_requests(context).values("pk")
-        rows = AuditEvent.objects.filter(entity="LeaveRequest", entity_id__in=request_ids)
+        employee_ids = hr_operation_employees(context).values("pk")
+
+        def audit_ids(queryset):
+            return queryset.order_by().annotate(
+                audit_id=Cast("pk", output_field=CharField()),
+            ).values("audit_id")
+
+        request_ids = audit_ids(LeaveRequest.objects.filter(employee_id__in=employee_ids))
+        contract_ids = audit_ids(ContractPeriod.objects.filter(employee_id__in=employee_ids))
+        note_ids = audit_ids(BradfordNote.objects.filter(employee_id__in=employee_ids))
+        comment_ids = audit_ids(
+            LeaveRequestComment.objects.filter(request__employee_id__in=employee_ids),
+        )
+        attachment_ids = audit_ids(
+            LeaveRequestAttachment.objects.filter(request__employee_id__in=employee_ids),
+        )
+        entitlement_event_ids = audit_ids(
+            EntitlementEvent.objects.filter(entitlement__employee_id__in=employee_ids),
+        )
+        employee_id_strings = EmployeeProfile.objects.filter(
+            pk__in=employee_ids,
+        ).order_by().annotate(
+            audit_id=Cast("pk", output_field=CharField()),
+        ).values("audit_id")
+        invitation_ids = audit_ids(
+            EmployeeInvitation.objects.filter(employee_id__in=employee_ids),
+        )
+        rows = AuditEvent.objects.filter(
+            Q(entity="LeaveRequest", entity_id__in=request_ids)
+            | Q(entity="EmployeeProfile", entity_id__in=employee_id_strings)
+            | Q(entity="EmployeeInvitation", entity_id__in=invitation_ids)
+            | Q(entity="ContractPeriod", entity_id__in=contract_ids)
+            | Q(entity="BradfordNote", entity_id__in=note_ids)
+            | Q(entity="LeaveRequestComment", entity_id__in=comment_ids)
+            | Q(entity="LeaveRequestAttachment", entity_id__in=attachment_ids)
+            | Q(entity="EntitlementEvent", entity_id__in=entitlement_event_ids)
+        )
     else:
         return _failure("permission_denied", "مشاهده حسابرسی مجاز نیست", 403)
     rows = rows.select_related("actor").order_by("-created_at", "-pk")[:500]
     return Response([{
-        "id": item.pk, "actorName": (
+        "id": item.pk, "actorId": item.actor_id, "actorName": (
             item.actor.get_full_name() or item.actor.get_username() if item.actor_id else None
         ), "action": item.action, "entity": item.entity, "entityId": item.entity_id,
-        "reason": item.reason, "result": item.result, "createdAt": item.created_at.isoformat(),
+        "reason": item.reason if is_admin else "",
+        "result": item.result, "createdAt": item.created_at.isoformat(),
+        "before": item.before if is_admin else None,
+        "after": item.after if is_admin else None,
+        "correlationId": item.correlation_id if is_admin else None,
+        "source": item.source if is_admin else "",
     } for item in rows])
 
 
@@ -537,7 +872,9 @@ def audit_events(request):
 def jobs(request):
     if not _admin(_context(request)):
         return _failure("permission_denied", "مشاهده Jobها فقط برای مدیر سامانه مجاز است", 403)
-    return Response([])
+    from .job_services import job_status_payload
+
+    return Response(job_status_payload())
 
 
 @api_view(["GET"])
@@ -545,7 +882,7 @@ def client_policy(request):
     context = _context(request)
     if not context.employee:
         return _failure("employee_profile_required", "پرونده کارمندی برای دریافت سیاست لازم است", 403)
-    today = timezone.localdate()
+    today = organization_localdate()
     from .calendar_services import _patterns_for
 
     pattern = next(iter(_patterns_for(context.employee, today, today)), None)
@@ -559,7 +896,7 @@ def client_policy(request):
         "workdayMinutes": pattern.daily_work_minutes if pattern else 0,
         "autoCancelEnabled": False,
         "autoCancelDays": None,
-        "timezoneLabel": timezone.get_current_timezone_name(),
+        "timezoneLabel": timezone.get_default_timezone_name(),
     })
 
 
@@ -589,6 +926,7 @@ def _notification_json(event: LeaveRequestEvent, read: bool) -> dict:
         "request_withdraw": "درخواست لغو مرخصی ثبت شد",
         "approve_withdraw": "لغو مرخصی تأیید شد",
         "reject_withdraw": "لغو مرخصی رد شد",
+        "reminder": "یادآوری درخواست معوق",
     }
     return {
         "id": event.pk,
@@ -619,6 +957,7 @@ def notification_read(request, notification_id: int):
     return Response(status=204)
 
 
+@rate_limited("expensive_operation")
 @api_view(["GET"])
 def coverage(request):
     context = _context(request)
@@ -633,7 +972,7 @@ def coverage(request):
         return _failure("invalid_range", "بازه تاریخ معتبر و حداکثر ۹۳ روز باشد", 400)
     if context.has_role("hr"):
         eligible = scoped_hr_leave_requests(context)
-        employee_rows = _employee_rows(context)
+        employee_rows = hr_operation_employees(context)
     elif context.employee_id:
         eligible = LeaveRequest.objects.filter(manager_snapshot_id=context.employee_id)
         employee_rows = EmployeeProfile.objects.filter(manager_id=context.employee_id)
@@ -644,30 +983,187 @@ def coverage(request):
         approved = approved.filter(leave_type__confidential=False)
     department_ids = employee_rows.values_list("department_id", flat=True)
     departments = Department.objects.filter(pk__in=department_ids).distinct()
+    population = list(
+        employee_rows.filter(department_id__in=departments.values("pk")).values(
+            "id", "department_id", "is_employee", "start_date", "end_date", "account_status",
+        )
+    )
+    status_history = employment_status_history(
+        [employee["id"] for employee in population],
+        through_date=end,
+    )
+    employees_by_department: dict[int, list[dict]] = {}
+    for employee in population:
+        employees_by_department.setdefault(employee["department_id"], []).append(employee)
+    days = [start + dt.timedelta(days=n) for n in range((end - start).days + 1)]
+    employed_by_day: dict[dt.date, dict[int, set[int]]] = {}
+    for day in days:
+        employed_by_department = {}
+        for department_id, employees in employees_by_department.items():
+            employed_ids = {
+                employee["id"]
+                for employee in employees
+                if is_employed_on(
+                    employee,
+                    day,
+                    status_history=status_history.get(employee["id"], ()),
+                )
+            }
+            employed_by_department[department_id] = employed_ids
+        employed_by_day[day] = employed_by_department
+
+    away_by_day: dict[dt.date, dict[int, set[int]]] = {
+        day: {department.pk: set() for department in departments}
+        for day in days
+    }
+    leave_spans = approved.values_list(
+        "employee__department_id", "employee_id", "start_date", "end_date",
+    ).distinct()
+    for department_id, employee_id, leave_start, leave_end in leave_spans:
+        for day in days:
+            if leave_start <= day <= leave_end:
+                away_by_day[day].setdefault(department_id, set()).add(employee_id)
+
     result = []
-    for day in (start + dt.timedelta(days=n) for n in range((end - start).days + 1)):
+    for day in days:
         for department in departments:
-            away = approved.filter(
-                employee__department=department, start_date__lte=day, end_date__gte=day,
-            ).values("employee_id").distinct().count()
-            headcount = employee_rows.filter(department=department, end_date__isnull=True).count()
+            employed_ids = employed_by_day[day].get(department.pk, set())
+            away = len(away_by_day[day].get(department.pk, set()) & employed_ids)
             result.append({
                 "date": day.isoformat(), "departmentName": department.name,
-                "awayCount": away, "headcount": headcount,
+                "awayCount": away, "headcount": len(employed_ids),
             })
     return Response(result)
 
 
+def _bradford_scope(context) -> list[dict]:
+    scope_keys = {
+        RoleAssignment.SCOPE_COMPANY: {"companyId": "company_id"},
+        RoleAssignment.SCOPE_SITE: {"companyId": "company_id", "siteId": "site_id"},
+        RoleAssignment.SCOPE_DEPARTMENT: {
+            "companyId": "company_id", "departmentId": "department_id",
+        },
+        RoleAssignment.SCOPE_EMPLOYEE: {
+            "companyId": "company_id", "employeeId": "employee_id",
+        },
+    }
+    return [
+        {
+            "type": assignment.scope,
+            **{
+                key: getattr(assignment, field)
+                for key, field in scope_keys[assignment.scope].items()
+            },
+        }
+        for assignment in context.assignments
+        if assignment.role == "hr"
+    ]
+
+
+def _bradford_report(request, context) -> Response:
+    scope = _bradford_scope(context)
+    today = organization_localdate()
+    try:
+        start, end = bradford_services.report_period(request.query_params, today)
+    except bradford_services.BradfordReportError as exc:
+        return Response({
+            "status": "invalid_request",
+            "reportingPeriod": None,
+            "policy": None,
+            "authorizedScope": scope,
+            "series": [],
+            "warnings": [],
+            "emptyStateReason": exc.code,
+            "error": {"code": exc.code, "message_fa": exc.message_fa},
+        }, status=exc.status)
+    try:
+        limit = int(request.query_params.get("limit", bradford_services.DEFAULT_PAGE_SIZE))
+        offset = int(request.query_params.get("offset", 0))
+        if not 1 <= limit <= bradford_services.MAX_PAGE_SIZE or offset < 0:
+            raise ValueError
+    except (TypeError, ValueError):
+        return Response({
+            "status": "invalid_request",
+            "reportingPeriod": {"from": start.isoformat(), "to": end.isoformat()},
+            "policy": None,
+            "authorizedScope": scope,
+            "series": [],
+            "warnings": [],
+            "emptyStateReason": "invalid_pagination",
+            "error": {
+                "code": "invalid_pagination",
+                "message_fa": "حد صفحه باید بین ۱ تا ۲۰۰ و offset نامنفی باشد",
+            },
+        }, status=400)
+
+    base = {
+        "reportingPeriod": {"from": start.isoformat(), "to": end.isoformat()},
+        "policy": {
+            "version": bradford_services.POLICY_VERSION,
+            "formula": "S^2 * D",
+            "description_fa": (
+                "S تعداد دوره‌های غیبت و D تعداد روزهای تقویمی غیبت در بازه است؛ "
+                "دوره‌های هم‌پوشان یا متصل به هم ادغام می‌شوند."
+            ),
+            "status": "provisional",
+        },
+        "authorizedScope": scope,
+    }
+    try:
+        result = bradford_services.calculate_bradford_report(
+            employees=scoped_hr_employees(context),
+            start=start,
+            end=end,
+            offset=offset,
+            limit=limit,
+        )
+    except bradford_services.BradfordReportError as exc:
+        is_configuration_error = exc.code in {
+            "bradford_policy_not_configured",
+            "bradford_disabled",
+            "invalid_bradford_configuration",
+            "unsupported_bradford_configuration",
+        }
+        return Response({
+            **base,
+            "policy": None if is_configuration_error else base["policy"],
+            "status": "configuration_error" if is_configuration_error else "unavailable",
+            "series": [],
+            "pagination": {"offset": offset, "limit": limit, "total": None},
+            "warnings": [{"code": exc.code, "message_fa": exc.message_fa}],
+            "emptyStateReason": exc.code,
+            "error": {"code": exc.code, "message_fa": exc.message_fa},
+        }, status=exc.status)
+
+    return Response({
+        **base,
+        "status": result["status"],
+        "series": result["series"],
+        "pagination": result["pagination"],
+        "warnings": result["warnings"],
+        "emptyStateReason": result["empty_state_reason"],
+    })
+
+
+@rate_limited("expensive_operation")
 @api_view(["GET"])
 def reports(request, kind: str):
     context = _context(request)
+    return _report_response(request, context, kind)
+
+
+def _report_response(request, context, kind: str) -> Response:
+    if kind == "bradford":
+        if not context.has_role("hr"):
+            return _failure("permission_denied", "گزارش Bradford فقط برای HR دارای دامنه مجاز است", 403)
+        return _bradford_report(request, context)
     if not (context.has_role("hr") or context.has_role("exec")):
         return _failure("permission_denied", "مشاهده گزارش‌ها مجاز نیست", 403)
-    if kind not in {"absences", "balances", "trends", "process-health", "bradford"}:
+    if kind not in {"absences", "balances", "trends", "process-health"}:
         return _failure("unknown_report", "نوع گزارش شناخته‌شده نیست", 404)
     if context.has_role("hr"):
         rows = scoped_hr_leave_requests(context)
-        people = EmployeeProfile.objects.filter(pk__in=rows.values("employee_id"))
+        people = hr_operation_employees(context)
     else:
         employee_scope = Q()
         for assignment in RoleAssignment.objects.filter(user=request.user, role="exec", is_active=True):
@@ -679,13 +1175,16 @@ def reports(request, kind: str):
                 employee_scope |= Q(company_id=assignment.company_id, department_id=assignment.department_id)
         people = EmployeeProfile.objects.filter(employee_scope, is_employee=True)
         rows = LeaveRequest.objects.filter(employee_id__in=people.values("pk"))
+    people = employees_employed_on(people, organization_localdate())
     try:
         min_size = settings_schema.resolve({
             setting.key: setting.value for setting in SystemSetting.objects.all()
         })["privacy.min_group_size"]
     except settings_schema.SettingError as exc:
         return _failure("invalid_settings", str(exc), 409)
-    report_rows = rows if context.has_role("hr") else rows.filter(leave_type__confidential=False)
+    report_rows = rows.filter(employee_id__in=people.values("pk"))
+    if not context.has_role("hr"):
+        report_rows = report_rows.filter(leave_type__confidential=False)
     approved = report_rows.filter(status="APPROVED")
     if kind == "absences":
         categories = approved.values("leave_type__label_fa").annotate(
@@ -720,13 +1219,15 @@ def reports(request, kind: str):
             for item in categories if item["people"] >= min_size
         ]
     else:
-        return Response({
-            "title": kind, "series": [],
-            "note": "تحلیل Bradford در صفحه اختصاصی منابع انسانی و بر پایه قرارداد و تقویم کارکنان محاسبه می‌شود.",
-        })
+        series = []
     total_people = people.count()
     if total_people < min_size:
         return Response({"title": kind, "note": "برای رعایت حداقل گروه، داده این گزارش نمایش داده نمی‌شود.", "series": []})
+    if kind == "bradford":
+        return Response({
+            "title": kind, "series": series,
+            "note": "تحلیل Bradford در صفحه اختصاصی منابع انسانی و بر پایه قرارداد و تقویم کارکنان محاسبه می‌شود.",
+        })
     return Response({"title": kind, "series": series})
 
 
@@ -735,7 +1236,7 @@ def bradford_notes(request):
     context = _context(request)
     if not (context.has_role("hr") or _admin(context)):
         return _failure("permission_denied", "دسترسی یادداشت Bradford مجاز نیست", 403)
-    employee_rows = _employee_rows(context)
+    employee_rows = hr_operation_employees(context)
     if request.method == "GET":
         notes = BradfordNote.objects.select_related("employee__user", "updated_by").filter(
             employee_id__in=employee_rows.values("pk"),
@@ -755,9 +1256,31 @@ def bradford_notes(request):
     body = data["body"]
     if not isinstance(body, str) or not body.strip() or len(body) > 4000:
         return _failure("invalid_note", "متن یادداشت الزامی و حداکثر ۴۰۰۰ نویسه است", 400)
-    note, _ = BradfordNote.objects.update_or_create(
-        employee=employee, defaults={"body": body.strip(), "updated_by": request.user},
-    )
+    with transaction.atomic():
+        note = BradfordNote.objects.select_for_update().filter(employee=employee).first()
+        if note is None:
+            before = None
+            note = BradfordNote.objects.create(
+                employee=employee, body=body.strip(), updated_by=request.user,
+            )
+            action = "bradford_note.create"
+        else:
+            before = audit_services.snapshot(note)
+            note.body = body.strip()
+            note.updated_by = request.user
+            note.save(update_fields=["body", "updated_by", "updated_at"])
+            action = "bradford_note.update"
+        after = audit_services.snapshot(note)
+        after["contentChanged"] = True
+        audit_services.record_audit(
+            actor=request.user,
+            origin="admin" if _admin(context) else "hr",
+            action=action,
+            entity="BradfordNote",
+            entity_id=note.pk,
+            before=before,
+            after=after,
+        )
     return Response({
         "employeeId": note.employee_id, "body": note.body,
         "updatedAt": note.updated_at.isoformat(),
@@ -776,11 +1299,11 @@ def _contract_json(item: ContractPeriod) -> dict:
 @api_view(["GET", "POST"])
 def contracts(request, employee_id: int):
     context = _context(request)
-    employee = _employee_rows(context).filter(pk=employee_id).first()
+    if not (context.has_role("hr") or _admin(context)):
+        return _failure("permission_denied", "مشاهده یا تغییر قرارداد مجاز نیست", 403)
+    employee = hr_operation_employees(context).filter(pk=employee_id).first()
     if employee is None:
         raise Http404
-    if not (_hr(context, employee) or _admin(context)):
-        return _failure("permission_denied", "مشاهده یا تغییر قرارداد مجاز نیست", 403)
     if request.method == "GET":
         rows = ContractPeriod.objects.filter(employee=employee)
         return Response([_contract_json(item) for item in rows])
@@ -804,22 +1327,35 @@ def contracts(request, employee_id: int):
         ).filter(Q(end_date__isnull=True) | Q(end_date__gte=start)).exists()
         if overlaps:
             return _failure("contract_period_conflict", "بازه قرارداد با قرارداد ثبت‌شده هم‌پوشانی دارد", 409)
-        item = ContractPeriod.objects.create(
-            employee=employee, start_date=start, end_date=end,
-            work_days=days, contract_percent=percent, created_by=request.user,
-        )
+        with transaction.atomic():
+            item = ContractPeriod.objects.create(
+                employee=employee, start_date=start, end_date=end,
+                work_days=days, contract_percent=percent, created_by=request.user,
+            )
+            audit_services.record_model_change(
+                actor=request.user,
+                origin="admin" if _admin(context) else "hr",
+                action="contract_period.create",
+                instance=item,
+            )
     except (ValueError, TypeError, InvalidOperation):
         return _failure("invalid_contract", "بازه، روزهای کاری یا درصد قرارداد معتبر نیست", 400)
     return Response(_contract_json(item), status=201)
 
 
+@rate_limited("file_upload")
 @api_view(["GET", "POST"])
 def request_attachments(request, request_id: int):
-    from .workflow_views import _comment_allowed, _visible_request
+    from .workflow_views import _comment_allowed, _hr_for, _visible_request
 
     context = _context(request)
-    row = _visible_request(request_id, context)
-    if not _comment_allowed(context, row):
+    try:
+        row = _visible_request(request_id, context)
+    except LeaveRequest.DoesNotExist as exc:
+        raise Http404 from exc
+    if (
+        context.employee_id != row.employee_id and not _hr_for(context, row)
+    ) or not _comment_allowed(context, row):
         return _failure("permission_denied", "دسترسی به پیوست این درخواست مجاز نیست", 403)
     if request.method == "GET":
         return Response([{
@@ -827,56 +1363,100 @@ def request_attachments(request, request_id: int):
             "fileName": attachment.file_name,
             "sizeLabel": f"{max(1, round(attachment.file_size / 1024))} KB",
             "createdAt": attachment.created_at.isoformat(),
+            "scanStatus": attachment.scan_status,
             "downloadUrl": f"/api/v1/leave-requests/{request_id}/attachments/{attachment.pk}/",
-        } for attachment in row.attachments.all()])
+        } for attachment in row.attachments.filter(
+            deletion_status=LeaveRequestAttachment.DELETION_ACTIVE,
+        )])
 
     upload = request.FILES.get("file")
     if upload is None:
         return _failure("invalid_attachment", "فایل پیوست الزامی است", 400)
-    if upload.size == 0 or upload.size > 10 * 1024 * 1024:
-        return _failure("invalid_attachment", "حجم فایل باید بین ۱ بایت و ۱۰ مگابایت باشد", 400)
-    file_name = upload.name.replace("\\", "/").rsplit("/", 1)[-1].strip()
-    extension = file_name.rsplit(".", 1)[-1].lower() if "." in file_name else ""
-    accepted = {
-        "pdf": ("application/pdf", b"%PDF-"),
-        "png": ("image/png", b"\x89PNG\r\n\x1a\n"),
-        "jpg": ("image/jpeg", b"\xff\xd8\xff"),
-        "jpeg": ("image/jpeg", b"\xff\xd8\xff"),
-    }
-    if extension not in accepted or len(file_name) > 255:
-        return _failure("invalid_attachment", "فقط فایل PDF، PNG یا JPEG مجاز است", 400)
-    content_type, signature = accepted[extension]
-    if upload.content_type != content_type or upload.read(len(signature)) != signature:
-        return _failure("invalid_attachment", "نوع یا محتوای فایل با پسوند آن سازگار نیست", 400)
-    upload.seek(0)
-    attachment = LeaveRequestAttachment.objects.create(
-        request=row, file=upload, file_name=file_name, content_type=content_type,
-        file_size=upload.size, uploaded_by=request.user,
+    try:
+        validated = validate_attachment(upload)
+    except InvalidAttachment:
+        return _failure("invalid_attachment", "فایل معتبر یا مجاز نیست", 400)
+    except AttachmentScannerUnavailable:
+        logger.error("Configured attachment malware scanner is unavailable.")
+        return _failure("attachment_scanner_unavailable", "بررسی امنیتی فایل در دسترس نیست", 503)
+
+    attachment = LeaveRequestAttachment(
+        request=row,
+        file_name=validated.filename,
+        content_type=validated.content_type,
+        file_size=len(validated.content),
+        scan_status=validated.scan_status,
+        uploaded_by=request.user,
     )
+    storage = attachment.file.storage
+    requested_storage_name = attachment_upload_path(attachment, validated.filename)
+    try:
+        stored_name = storage.save(requested_storage_name, ContentFile(validated.content))
+    except OSError:
+        logger.error("Private attachment storage write failed.")
+        return _failure("attachment_storage_unavailable", "ذخیره فایل در دسترس نیست", 503)
+
+    try:
+        with transaction.atomic():
+            attachment.file = stored_name
+            attachment.save(force_insert=True)
+            audit_services.record_model_change(
+                actor=request.user,
+                origin="hr" if context.has_role("hr") else "employee",
+                action="leave_request.attachment_added",
+                instance=attachment,
+            )
+    except Exception:
+        try:
+            storage.delete(stored_name)
+        except OSError:
+            logger.error("Failed to clean up an orphaned private attachment.")
+        raise
+
     return Response({
         "id": attachment.pk, "fileName": attachment.file_name,
         "sizeLabel": f"{max(1, round(attachment.file_size / 1024))} KB",
         "createdAt": attachment.created_at.isoformat(),
+        "scanStatus": attachment.scan_status,
         "downloadUrl": f"/api/v1/leave-requests/{request_id}/attachments/{attachment.pk}/",
     }, status=201)
 
 
+@rate_limited("file_access")
 @api_view(["GET"])
 def request_attachment_download(request, request_id: int, attachment_id: int):
-    from .workflow_views import _comment_allowed, _visible_request
+    from .workflow_views import _comment_allowed, _hr_for, _visible_request
 
     context = _context(request)
-    row = _visible_request(request_id, context)
-    if not _comment_allowed(context, row):
+    try:
+        row = _visible_request(request_id, context)
+    except LeaveRequest.DoesNotExist as exc:
+        raise Http404 from exc
+    if (
+        context.employee_id != row.employee_id and not _hr_for(context, row)
+    ) or not _comment_allowed(context, row):
         return _failure("permission_denied", "دسترسی به پیوست این درخواست مجاز نیست", 403)
-    attachment = row.attachments.filter(pk=attachment_id).first()
+    attachment = row.attachments.filter(
+        pk=attachment_id,
+        deletion_status=LeaveRequestAttachment.DELETION_ACTIVE,
+    ).first()
     if attachment is None:
         raise Http404
+    try:
+        if not attachment.file.storage.exists(attachment.file.name):
+            raise Http404
+        file_handle = attachment.file.open("rb")
+    except FileNotFoundError as exc:
+        raise Http404 from exc
+    except OSError:
+        logger.error("Private attachment storage read failed.")
+        return _failure("attachment_storage_unavailable", "خواندن فایل در دسترس نیست", 503)
     response = FileResponse(
-        attachment.file.open("rb"), as_attachment=True,
-        filename=attachment.file_name, content_type=attachment.content_type,
+        file_handle, as_attachment=True, filename=attachment.file_name,
+        content_type=attachment.content_type,
     )
     response["Cache-Control"] = "private, no-store"
+    response["Pragma"] = "no-cache"
     response["X-Content-Type-Options"] = "nosniff"
     return response
 
@@ -896,12 +1476,15 @@ def hr_absence(request):
     if not isinstance(data, dict) or set(data) - allowed:
         return _failure("invalid_payload", "اطلاعات غیبت معتبر نیست", 400)
     try:
-        employee = _employee_rows(context).get(pk=data["employeeId"])
+        employee = hr_operation_employees(context).get(pk=data["employeeId"])
         if not _submit_permission(context, employee):
             return _failure("permission_denied", "ثبت غیبت برای این کارمند مجاز نیست", 403)
         leave_type = LeaveType.objects.get(key=data["leaveTypeKey"])
         fields = _request_body({key: data[key] for key in allowed - {"employeeId"} if key in data})
-        replacement = EmployeeProfile.objects.filter(pk=fields["replacement_id"]).first()
+        replacement = (
+            hr_operation_employees(context).filter(pk=fields["replacement_id"]).first()
+            if fields["replacement_id"] is not None else None
+        )
         if fields["replacement_id"] is not None and replacement is None:
             raise ValueError("جانشین معتبر نیست")
 

@@ -1,22 +1,60 @@
 # استقرار، پشتیبان‌گیری، بازیابی
 
-وضعیت: طراحی؛ **هیچ‌کدام در این محیط اجرا نشده** (Docker/PostgreSQL در دسترس نیست).
+وضعیت: فقط نمونهٔ systemd زمان‌بند در [راهنمای کارهای پس‌زمینه](./background-jobs-fa.md) موجود است. توپولوژی وب production در این مخزن مشخص یا قابل اجرا نیست؛ فایل Compose، تنظیمات reverse proxy، unit وب و محدودیت شبکهٔ upstream وجود ندارند.
 
-## سرویس‌ها (Docker Compose)
-`db` (PostgreSQL، volume)، `backend`، `worker` (Jobها)، `proxy` (TLS)، `redis` فقط در صورت نیاز. تنظیمات از `.env` (نمونه `.env.example` بدون راز واقعی).
+## توپولوژی وب و تصمیم TLS
+
+اسناد طراحی به اجزای `db`، `backend` و `proxy` اشاره می‌کنند، اما این فقط معماری پیشنهادی است و نه پیکربندی استقرار پشتیبانی‌شده. مسئول استقرار باید پیش از production یکی از این دو حالت را تعیین کند:
+
+1. **TLS تا خود Django/Gunicorn:** وب‌سرور upstream باید اتصال HTTPS را به WSGI با `wsgi.url_scheme=https` منتقل کند. هدرهای ارسالی کاربر برای تعیین طرح درخواست استفاده نشوند.
+2. **TLS در reverse proxy و HTTP خصوصی تا Django:** `ZSH_TRUSTED_PROXY_IPS` را فقط با CIDR آدرس‌های واقعی proxyهای مستقیم پر کنید. proxy باید هدر ورودی `X-Forwarded-Proto` را حذف و خودش آن را دقیقاً به `https` یا `http` تنظیم کند. middleware برنامه این هدر را تنها از peer در CIDR مورد اعتماد می‌پذیرد؛ بقیهٔ درخواست‌ها نمی‌توانند با جعل هدر از redirect HTTPS عبور کنند.
+
+در هر دو حالت، `ZSH_ALLOWED_HOSTS` باید نام میزبان‌های عمومی را دقیق فهرست کند؛ wildcard `*` در production رد می‌شود. `ZSH_CSRF_TRUSTED_ORIGINS` فقط originهای کامل HTTPS موردنیاز، مانند `https://app.example.test`، را بپذیرد؛ scheme HTTP، wildcard و path رد می‌شوند. اگر frontend هم‌مبدأ است، این متغیر را خالی بگذارید.
+
+### الگوی vendor-neutral برای proxy (نیازمند پیاده‌سازی در محصول انتخابی)
+
+این الگو دستور پیکربندی یک محصول خاص نیست؛ syntax آن باید پس از انتخاب proxy به تنظیمات همان محصول تبدیل و در staging آزموده شود:
+
+```text
+برای هر درخواست ورودی:
+  اعتبارسنجی/حفظ Host اصلی مطابق فهرست دامنه‌های منتشرشده
+  حذف X-Forwarded-Proto ارسالی کاربر
+  تنظیم X-Forwarded-Proto بر اساس TLS خود اتصال ورودی (https یا http)
+  بازنویسی X-Forwarded-For با IP همتای واقعی یا ساخت زنجیرهٔ hopهای کنترل‌شده
+  ارسال به upstream فقط از شبکهٔ خصوصی یا Unix socket
+```
+
+آدرس peerی که Django در `REMOTE_ADDR` می‌بیند باید داخل یکی از CIDRهای `ZSH_TRUSTED_PROXY_IPS` باشد. دسترسی مستقیم اینترنت عمومی به پورت/socket برنامه را با firewall، شبکهٔ container یا کنترل معادل ببندید؛ فقط فیلتر هدر جایگزین محدودسازی شبکه نیست. برای چند proxy، فقط peer مستقیم را trusted کنید و قرارداد بازنویسی/انتقال scheme و IP را برای تمام hopها مستند کنید.
+
+Redirect HTTPS خاموش نمی‌شود. Health checkهای reverse proxy را از مسیر HTTPS منتشرشده به `/api/v1/health/` یا `/api/v1/ready/` بفرستید تا همان گواهی، Host و مسیر TLS بررسی شود. HTTP به خود برنامه، بدون هدر معتبر proxy، عمداً redirect می‌شود. اگر TLS proxy تنظیم نشده باشد اما upstream با HTTP باشد، redirect loop محتمل است؛ قبل از انتشار باید حالت TLS و CIDR peer با واقعیت شبکه تطبیق داده شوند.
+
+### آزمون smoke پس از انتخاب proxy
+
+دامنه و گواهی واقعی را جایگزین کنید؛ `curl` را بدون `-k` اجرا کنید تا اعتبار گواهی هم بررسی شود:
+
+```sh
+curl -sSI https://leave.example.test/api/v1/health/
+curl -sSI http://leave.example.test/api/v1/health/
+curl -sSI https://leave.example.test/api/v1/ready/
+curl -sSI https://leave.example.test/api/v1/health/ -H 'Host: attacker.example'
+```
+
+انتظار: HTTPS سلامت `200` و HSTS بدهد؛ HTTP یک redirect به همان مسیر HTTPS بدهد؛ readiness پس از آماده‌شدن DB/scheduler `200` باشد؛ Host ناشناخته `400` بگیرد. درخواست HTTP مستقیم به upstream از شبکهٔ غیرمجاز باید در لایهٔ شبکه مسدود شود. اگر از شبکهٔ تست داخلی قابل دسترسی است، جعل `X-Forwarded-Proto: https` از peer خارج از CIDR نباید redirect را دور بزند. جزئیات تست‌های Django در [راهنمای مدیر سامانه](./final-documentation/06-system-administrator-guide.md) و [چک‌لیست production](./final-documentation/09-production-readiness-checklist.md) آمده است.
 
 ## نصب
-1. کپی `.env.example` → `.env` و تنظیم SECRET_KEY، DB، ALLOWED_HOSTS، SMTP (اختیاری).
-2. `docker compose up -d --build`
-3. `docker compose exec backend python manage.py migrate`
-4. ایجاد مدیر سامانه با `createsuperadmin`.
-5. بارگذاری داده نمونه فقط در Demo (`seed_demo`).
+این مخزن فرمان نصب وب/DB را ارائه نمی‌کند. پیش از تعریف deployment، مسئول عملیات باید image/runtime، WSGI server، proxy/TLS، روش secret injection، شبکهٔ خصوصی upstream، volume فایل‌ها، migration و rollback را انتخاب کند. `.env.example` یا دستورهای فرضی Compose در این مخزن مبنای اجرای production نیستند.
+
+پس از انتخاب runtime، پیکربندی SMTP برای ارسال دعوت کارکنان در production لازم است؛ راهنمای متغیرها در [چرخه عمر حساب کارمند](./account-lifecycle-fa.md) است. جدول cache مشترک باید با `DJANGO_SETTINGS_MODULE=config.settings_prod python manage.py createcachetable zsh_cache` ایجاد شود.
+
+برای اجرای کارهای زمان‌بندی‌شده، unit و timer systemd و شرط‌های readiness در [راهنمای عملیات پس‌زمینه](./background-jobs-fa.md) را دقیقاً نصب و فعال کنید. بدون این پیکربندی، Jobs API زمان‌بند را پیکربندی‌نشده اعلام می‌کند و readiness production موفق نمی‌شود.
 
 ## پشتیبان‌گیری
-`pg_dump -Fc` شبانه + کپی volume پیوست‌ها؛ رمزگذاری با کلید جدا؛ نگهداری چرخشی.
+`pg_dump -Fc` شبانه + backup سازگار از `ZSH_ATTACHMENT_ROOT`؛ رمزگذاری با کلید جدا؛ نگهداری چرخشی. metadata و فایل باید با هم backup و restore شوند. مسیر خصوصی فایل و سیاست زمان‌بندی/تأیید حذف در [سیاست پیوست‌ها](./attachment-security-fa.md) مستند است.
 
 ## بازیابی (باید در محیط جدا آزمون شود)
 ایجاد DB خالی → `pg_restore` → بازگردانی volume فایل‌ها → `migrate --check` → Health → مقایسه شمارش رکوردها و مجموع مانده با قبل از پشتیبان. گزارش آزمون در `docs/test-report.md`.
 
 ## پیش‌نیازهای شبکه داخلی
 گواهی TLS داخلی، SMTP داخلی (OQ-13)، دسترسی ذخیره‌سازی/پشتیبان، DNS، فهرست کاربران اولیه و ساختار سازمانی (OQ-11)، مالک سیاست مرخصی در HR.
+
+در production، `ZSH_EMAIL_ENABLED=1`، `ZSH_EMAIL_HOST`، `ZSH_DEFAULT_FROM_EMAIL` و `ZSH_PUBLIC_BASE_URL` با HTTPS را از secret manager/config امن سرویس تنظیم کنید. اگر ارائه‌دهنده آماده نباشد، دعوت در وضعیت pending می‌ماند و API خطای ارسال را اعلام می‌کند؛ هرگز `ZSH_INVITATION_EXPOSE_DEV_LINKS` را در production فعال نکنید.

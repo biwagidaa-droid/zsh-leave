@@ -18,6 +18,8 @@ Assignments are persisted in `RoleAssignment`, reject invalid scope combinations
 
 Supported assignment scopes are global (system administrator only), company, site, department, and employee. HR querysets are constrained at the database layer to each assignment's selected scope. Employee and manager selectors include self and permitted team members. Executives and system administrators are excluded from individual leave selectors.
 
+Organization Sites are company-owned siblings of Departments, not children of Departments. Company-scoped HR can manage Sites only within its assigned company; department- and site-scoped HR can read Sites visible in their scope but cannot mutate Site records. Site-scoped HR employee access is constrained by both company and Site. Site ownership is immutable after creation. Deactivation preserves existing employee and history references while preventing new employee assignments; physical deletion is permitted only when protected references do not exist.
+
 ## 4. Permission and Object Rules
 
 `leave.authorization` is the shared permission engine and ORM selector layer. It resolves roles on each request (no long-lived role cache), checks operation permissions, and provides scoped employee/leave-request querysets plus object-level `can_view_leave_request` and `can_decide_leave_request` checks.

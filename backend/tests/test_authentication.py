@@ -249,7 +249,9 @@ class ProductionAuthenticationSettingsTests(TestCase):
         valid_environment = {
             "ZSH_SECRET_KEY": "x" * 50,
             "ZSH_ALLOWED_HOSTS": "example.test",
+            "ZSH_DB_USER": "zsh_app",
             "ZSH_DB_PASSWORD": "safe-test-password",
+            "ZSH_ATTACHMENT_ROOT": "/tmp/zsh-attachment-validation",
         }
         with patch.dict(os.environ, valid_environment, clear=True):
             settings_prod = importlib.import_module("config.settings_prod")
@@ -257,6 +259,18 @@ class ProductionAuthenticationSettingsTests(TestCase):
         self.assertTrue(settings_prod.SESSION_COOKIE_SECURE)
         self.assertTrue(settings_prod.CSRF_COOKIE_SECURE)
         self.assertTrue(settings_prod.SECURE_SSL_REDIRECT)
+        self.assertEqual(
+            settings_prod.CACHES["default"]["BACKEND"],
+            "django.core.cache.backends.db.DatabaseCache",
+        )
+        self.assertEqual(settings_prod.CACHES["default"]["LOCATION"], "zsh_cache")
+        with patch.dict(os.environ, {
+            "ZSH_SECRET_KEY": "x" * 50,
+            "ZSH_ALLOWED_HOSTS": "example.test",
+            "ZSH_DB_PASSWORD": "safe-test-password",
+        }, clear=True):
+            with self.assertRaisesRegex(RuntimeError, "ZSH_DB_USER"):
+                importlib.reload(settings_prod)
         with patch.dict(os.environ, {
             "ZSH_SECRET_KEY": "x" * 50,
             "ZSH_DB_PASSWORD": "safe-test-password",
@@ -275,4 +289,12 @@ class ProductionAuthenticationSettingsTests(TestCase):
             "ZSH_DB_PASSWORD": "safe-test-password",
         }, clear=True):
             with self.assertRaisesRegex(RuntimeError, "ZSH_SECRET_KEY"):
+                importlib.reload(settings_prod)
+        with patch.dict(os.environ, {
+            "ZSH_SECRET_KEY": "x" * 50,
+            "ZSH_ALLOWED_HOSTS": "example.test",
+            "ZSH_DB_PASSWORD": "safe-test-password",
+            "ZSH_INVITATION_EXPOSE_DEV_LINKS": "1",
+        }, clear=True):
+            with self.assertRaisesRegex(RuntimeError, "cannot be exposed"):
                 importlib.reload(settings_prod)

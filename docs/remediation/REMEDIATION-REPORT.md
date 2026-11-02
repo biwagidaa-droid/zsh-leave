@@ -20,6 +20,57 @@
 | fingerprint بخشی از ورودی را نادیده می‌گرفت | `workingDays` و `replacementId` در payload ثبت نمی‌شدند | fingerprint شامل همه فیلدهای اثرگذار است | استفاده از همان کلید با ورودی متفاوت 409 | FIXED AND VERIFIED |
 | دسترسی خارج دامنه و rollback | تست رگرسیون برای actor غیر HR، HR خارج دامنه و خطای اعتبارسنجی موجود نبود | تست‌های 403/404 و rollback رویداد/حسابرسی/idempotency افزوده شد | آزمون API SQLite | FIXED AND VERIFIED |
 
+## فاز ۳ — مجوز کاتالوگ سراسری LeaveType
+
+| یافته | ریشه | اقدام | آزمون | وضعیت |
+|---|---|---|---|---|
+| HR دامنه‌دار می‌توانست تنظیمات سراسری LeaveType را بخواند/تغییر دهد | endpoint، `has_role("hr")` را به‌عنوان مجوز نوشتن می‌پذیرفت؛ مدل LeaveType شرکت ندارد | افزودن `leave_type.global.manage` فقط برای admin سراسری/superuser؛ الزام permission در API و سرویس؛ HR فقط metadata فعال را می‌خواند؛ دلیل و before/after/actor/time/correlation ID در AuditEvent | آزمون منع create/update/confidential/counts/approval/deactivate و self-grant؛ آزمون عملیات مجاز admin، سیاست خواندن و نبود audit موفقیت کاذب؛ کل backend: ۱۸۹ تست، ۳ skipped | FIXED AND VERIFIED |
+
 ## سایر فازها
 
 فازهای lifecycle/offboarding، activation، RBAC سازمانی کامل، Bradford، scheduler، audit append-only، PostgreSQL، ادغام Frontend گسترده و آمادگی استقرار در این بازه پیاده‌سازی یا تأیید نشده‌اند. برای ادامه، `PROGRESS.md` را ببینید.
+
+## فاز چرخه استخدام و offboarding — راستی‌آزمایی مستقل
+
+**وضعیت: BLOCKED / NOT VERIFIED — نقص دسترسی بازتولید شد.** هیچ تغییر مؤثر چرخه استخدام در backend باقی نمانده است. diff اولیه فقط یک فیلد `session_version` و مدل تاریخچه استخدام اضافه می‌کرد، بدون migration، استفاده در authentication یا اتصال به authorization. تست‌ها با آن مدل ناقص ۲۶ خطای schema دادند؛ تغییر ناقص حذف شد.
+
+| بررسی | نتیجه | شواهد |
+|---|---|---|
+| دسترسی employee منقضی | **FAIL — bypass تأیید شد** | `end_date=2026-10-31` و کاربر فعال در 2026-11-01 هنوز نقش employee داشت |
+| اختیار manager منقضی | **FAIL — bypass تأیید شد** | manager منقضی نقش manager و `can_decide_leave_request=True` داشت |
+| employee فعال معمولی | مجاز | probe نقش employee را برای اشتغال جاری تأیید کرد |
+| کاربر غیرفعال | رد شد | `User.is_active=False` هیچ نقش authorization نگرفت |
+| عدم اثر جانبی رد درخواست | تأیید برای endpoint موجود HR | آزمون 403/404 و rollback ورودی نامعتبر، بدون request/event/audit/idempotency |
+| migration سازگار | schema فعلی بدون تغییر | `makemigrations --check --dry-run` موفق؛ هیچ migration چرخه استخدامی تولید/اعمال نشده |
+| session/token revocation | **NOT VERIFIED** | فقط Django database session یافت شد؛ refresh/API token یا service ابطال نشست وجود ندارد |
+
+قانون هدف برای پیاده‌سازی بعدی این است که روز `end_date` آخرین روز اشتغال و شامل همان روز باشد و تاریخ جاری از `timezone.localdate()` گرفته شود. این قانون هنوز در سرویس و API اجرا نشده است. رفتار تعلیق/خاتمه، درخواست‌های در انتظار، rehire و ابطال نشست باید پیش از اعلام رفع نقص پیاده‌سازی و آزموده شوند. شواهد فرمان‌ها و محدودیت‌ها در `PROGRESS.md` آمده‌اند.
+
+## فاز ورود CSV سهمیه مرخصی — بازیابی و اصلاح
+
+**وظیفه:** شناسایی تکرارها و جلوگیری از ثبت گروهی ناسازگار در ورود CSV سهمیه.
+
+**وضعیت بازیابی:** هنگام شروع این فاز، تغییرات parser مشترک، سرویس اعتبارسنجی
+و مسیر بازاعتبارسنجی در تراکنش از قبل در worktree وجود داشتند، اما تست و
+مستندات این فاز کامل نبودند. تغییرات موجود حفظ و پیش از ادامه بررسی شدند.
+
+| یافته | ریشه | اقدام | آزمون/شواهد | وضعیت |
+|---|---|---|---|---|
+| کلید یکتای کسب‌وکار کارمند + نوع مرخصی + سال است | قید مدل `uniq_entitlement` روی سه فیلد | همان کلید برای تشخیص تکرار درون فایل و پایگاه داده استفاده می‌شود | تست تکرار در فایل، تکرار DB و دو ترکیب کلید متفاوت | FIXED |
+| Preview و commit می‌توانستند قواعد متفاوتی داشته باشند و نتیجه preview کهنه می‌شد | parser مستقل API و نبود بازاعتبارسنجی داخل تراکنش | سرویس اعتبارسنجی مشترک؛ commit اعتبارسنجی را در تراکنش تکرار و ردیف‌های مرجع را قفل می‌کند | تست هم‌خوانی preview/commit و ایجاد رکورد پس از preview | FIXED |
+| فایل دارای یک ردیف خطا ممکن بود به‌صورت جزئی ثبت شود | قواعد all-or-nothing باید در مرز تراکنش اعمال شود | حفظ سیاست A-13؛ هیچ سهمیه/رویدادی پس از خطای ردیف یا شکست دفترکل باقی نمی‌ماند | تست ورودی نامعتبر و rollback هنگام شکست ایجاد ledger | FIXED |
+| خطاهای ساختار CSV باید قابل اقدام باشند | ردیف کوتاه/بلند، header و encoding نیازمند نتیجه صریح‌اند | کد خطا و شماره سطر؛ رد header تکراری/اضافی، تعداد ستون نادرست، UTF-8 نامعتبر و CSV malformed | تست‌های parser و endpoint | FIXED |
+
+مشخصات فارسی کسب‌وکار و قالب فایل در
+[`entitlement-csv-import-fa.md`](../entitlement-csv-import-fa.md) ثبت شده است.
+فایل‌های Frontend و migrationها تغییر نکردند. تست هم‌زمانی مخصوص PostgreSQL
+تعریف شده، اما در SQLite اجرا نمی‌شود و تا زمان اجرای آن روی PostgreSQL
+**NOT VERIFIED** باقی می‌ماند.
+
+اعتبارسنجی نهایی: مجموعه کامل backend با فرمان
+`cd backend && DJANGO_SETTINGS_MODULE=config.settings_test python manage.py test`
+با **۲۸۵ تست موفق و ۷ تست skip** پایان یافت. تست‌های متمرکز import، دفترکل و
+parser نیز **۴۳ تست موفق و ۴ تست skip** داشتند. `manage.py check` بدون خطا بود،
+`makemigrations --check --dry-run` تغییر جدیدی گزارش نکرد و `git diff --check`
+تمیز بود. تست‌های قفل/رقابت PostgreSQL به دلیل استفاده از SQLite در این محیط
+جزو موارد skip هستند.

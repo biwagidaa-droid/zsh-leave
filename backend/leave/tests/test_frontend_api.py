@@ -4,26 +4,41 @@ import tempfile
 from decimal import Decimal
 
 from django.contrib.auth import get_user_model
+from django.core.cache import cache
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.core.exceptions import PermissionDenied
+from django.db import connection
 from django.test import TestCase, override_settings
+from django.test.utils import CaptureQueriesContext
 from django.urls import resolve
 from rest_framework.test import APIClient
 
+from leave.authorization import MANAGE_GLOBAL_LEAVE_TYPES, authorization_context, has_permission
+from leave.authorization_services import grant_role_assignment
+from leave.admin_services import save_leave_type
 from leave.entitlement_services import create_entitlement
+from leave.employment_services import organization_localdate
+from leave.invitation_services import suspend_employee
 from leave.models import (
+    AuditEvent,
+    BradfordNote,
     Company,
     Department,
+    EntitlementEvent,
     EmployeeProfile,
+    LeaveEntitlement,
     LeaveRequest,
     LeaveRequestEvent,
     LeaveType,
     RoleAssignment,
     SystemSetting,
 )
+from leave.tests.attachment_helpers import valid_pdf
 
 
 class FrontendApiTests(TestCase):
     def setUp(self):
+        cache.clear()
         user_model = get_user_model()
         self.company = Company.objects.create(code="FRONTEND", name="Frontend company")
         self.department = Department.objects.create(
@@ -83,6 +98,8 @@ class FrontendApiTests(TestCase):
             "/api/v1/employees/1/contract-periods/": "employee-contracts",
             "/api/v1/companies/": "companies",
             "/api/v1/companies/1/": "company-detail",
+            "/api/v1/sites/": "sites",
+            "/api/v1/sites/1/": "site-detail",
             "/api/v1/departments/": "departments",
             "/api/v1/departments/1/": "department-detail",
             "/api/v1/coverage/": "coverage",
@@ -98,6 +115,261 @@ class FrontendApiTests(TestCase):
         for path, route_name in routes.items():
             with self.subTest(path=path):
                 self.assertEqual(resolve(path).url_name, route_name)
+
+    def test_scoped_hr_cannot_create_or_mutate_global_leave_types(self):
+        initial_count = LeaveType.objects.count()
+        initial_audits = AuditEvent.objects.filter(entity="LeaveType").count()
+
+        created = self.client.post(
+            "/api/v1/leave-types/",
+            {"key": "other", "labelFa": "Other", "reason": "catalog change"},
+            format="json",
+        )
+        self.assertEqual(created.status_code, 403)
+        self.assertEqual(LeaveType.objects.count(), initial_count)
+
+        for field, value in (
+            ("confidential", True),
+            ("countsAgainstBalance", False),
+            ("requiresApproval", False),
+            ("enabled", False),
+        ):
+            with self.subTest(field=field):
+                response = self.client.patch(
+                    f"/api/v1/leave-types/{self.leave_type.pk}/",
+                    {field: value, "reason": "unauthorized change"},
+                    format="json",
+                )
+                self.assertEqual(response.status_code, 403)
+        self.assertEqual(
+            self.client.patch(
+                "/api/v1/leave-types/999999/",
+                {"enabled": False, "reason": "object substitution"},
+                format="json",
+            ).status_code,
+            403,
+        )
+
+        self.leave_type.refresh_from_db()
+        self.assertTrue(self.leave_type.counts_against_balance)
+        self.assertTrue(self.leave_type.requires_approval)
+        self.assertFalse(self.leave_type.confidential)
+        self.assertTrue(self.leave_type.enabled)
+        self.assertEqual(AuditEvent.objects.filter(entity="LeaveType").count(), initial_audits)
+        self.assertFalse(has_permission(
+            authorization_context(self.hr_user), MANAGE_GLOBAL_LEAVE_TYPES,
+        ))
+
+    def test_leave_type_mutation_rejects_employee_and_manager(self):
+        manager_user = get_user_model().objects.create_user(username="leave-type-manager")
+        manager = EmployeeProfile.objects.create(
+            user=manager_user, company=self.company, department=self.department,
+            personnel_code="M-1", start_date=dt.date(2020, 1, 1),
+        )
+        self.employee.manager = manager
+        self.employee.save(update_fields=["manager"])
+        audit_count = AuditEvent.objects.filter(entity="LeaveType").count()
+
+        for user in (self.employee_user, manager_user):
+            with self.subTest(user=user.username):
+                client = APIClient()
+                client.force_authenticate(user)
+                self.assertEqual(client.post(
+                    "/api/v1/leave-types/",
+                    {"key": "unauthorized", "labelFa": "No", "reason": "unauthorized"},
+                    format="json",
+                ).status_code, 403)
+                self.assertEqual(client.patch(
+                    f"/api/v1/leave-types/{self.leave_type.pk}/",
+                    {"requiresApproval": False, "reason": "unauthorized"},
+                    format="json",
+                ).status_code, 403)
+
+        self.leave_type.refresh_from_db()
+        self.assertTrue(self.leave_type.requires_approval)
+        self.assertEqual(AuditEvent.objects.filter(entity="LeaveType").count(), audit_count)
+
+    def test_employee_cannot_reassign_manager_through_employee_api(self):
+        manager_user = get_user_model().objects.create_user(username="unauthorized-manager")
+        manager = EmployeeProfile.objects.create(
+            user=manager_user, company=self.company, department=self.department,
+            personnel_code="M-UNAUTH", start_date=dt.date(2020, 1, 1),
+        )
+        self.client.force_authenticate(self.employee_user)
+
+        response = self.client.patch(
+            f"/api/v1/employees/{self.employee.pk}/",
+            {"managerId": manager.pk},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.employee.refresh_from_db()
+        self.assertIsNone(self.employee.manager_id)
+
+    def test_hr_employee_api_accepts_valid_manager_and_rejects_cycle(self):
+        manager_payload = {
+            "displayName": "Employee",
+            "personnelCode": self.employee.personnel_code,
+            "companyId": self.company.pk,
+            "managerId": self.hr.pk,
+        }
+        assigned = self.client.patch(
+            f"/api/v1/employees/{self.employee.pk}/", manager_payload, format="json",
+        )
+        self.assertEqual(assigned.status_code, 200, assigned.content)
+        self.employee.refresh_from_db()
+        self.assertEqual(self.employee.manager_id, self.hr.pk)
+
+        cycle_payload = {
+            "displayName": "Human resources",
+            "personnelCode": self.hr.personnel_code,
+            "companyId": self.company.pk,
+            "managerId": self.employee.pk,
+        }
+        cycle = self.client.patch(
+            f"/api/v1/employees/{self.hr.pk}/", cycle_payload, format="json",
+        )
+        self.assertEqual(cycle.status_code, 400, cycle.content)
+        self.hr.refresh_from_db()
+        self.assertIsNone(self.hr.manager_id)
+
+    def test_global_admin_can_manage_and_audit_leave_types(self):
+        admin = get_user_model().objects.create_user(username="leave-type-admin")
+        RoleAssignment.objects.create(
+            user=admin, role=RoleAssignment.ROLE_ADMIN, scope=RoleAssignment.SCOPE_GLOBAL,
+        )
+        client = APIClient()
+        client.force_authenticate(admin)
+        self.assertTrue(has_permission(
+            authorization_context(admin), MANAGE_GLOBAL_LEAVE_TYPES,
+        ))
+
+        created = client.post(
+            "/api/v1/leave-types/",
+            {
+                "key": "special", "labelFa": "ویژه", "confidential": True,
+                "employeeRequestable": False, "countsAgainstBalance": True,
+                "requiresApproval": False, "reason": "Approved policy update",
+            },
+            format="json",
+            HTTP_X_CORRELATION_ID="leave-type-create-123",
+        )
+        self.assertEqual(created.status_code, 201, created.content)
+        item = LeaveType.objects.get(key="special")
+        create_audit = AuditEvent.objects.get(
+            entity="LeaveType", entity_id=str(item.pk), action="leave_type.create",
+        )
+        self.assertEqual(create_audit.actor_id, admin.pk)
+        self.assertIsNone(create_audit.before)
+        self.assertEqual(create_audit.after["requiresApproval"], False)
+        self.assertEqual(create_audit.reason, "Approved policy update")
+        self.assertEqual(create_audit.correlation_id, "leave-type-create-123")
+        self.assertIsNotNone(create_audit.created_at)
+        audit_response = client.get("/api/v1/audit/events/")
+        self.assertEqual(audit_response.status_code, 200)
+        serialized_audit = next(
+            event for event in audit_response.json()
+            if event["entity"] == "LeaveType" and event["entityId"] == str(item.pk)
+        )
+        self.assertEqual(serialized_audit["correlationId"], "leave-type-create-123")
+        self.assertIsNone(serialized_audit["before"])
+        self.assertEqual(serialized_audit["after"]["key"], "special")
+
+        updated = client.patch(
+            f"/api/v1/leave-types/{item.pk}/",
+            {"requiresApproval": True, "reason": "Approval policy restored"},
+            format="json",
+        )
+        self.assertEqual(updated.status_code, 200, updated.content)
+        update_audit = AuditEvent.objects.get(
+            entity="LeaveType", entity_id=str(item.pk), action="leave_type.update",
+            reason="Approval policy restored",
+        )
+        self.assertFalse(update_audit.before["requiresApproval"])
+        self.assertTrue(update_audit.after["requiresApproval"])
+
+        deactivated = client.patch(
+            f"/api/v1/leave-types/{item.pk}/",
+            {"enabled": False, "reason": "Retired by policy"},
+            format="json",
+        )
+        self.assertEqual(deactivated.status_code, 200)
+        item.refresh_from_db()
+        self.assertFalse(item.enabled)
+        self.assertEqual(client.delete(f"/api/v1/leave-types/{item.pk}/").status_code, 405)
+
+    def test_leave_type_read_access_is_separate_from_write_access(self):
+        disabled = LeaveType.objects.create(
+            key="disabled", label_fa="Disabled", enabled=False,
+        )
+        hr_response = self.client.get("/api/v1/leave-types/")
+        self.assertEqual(hr_response.status_code, 200)
+        self.assertEqual(
+            {item["key"] for item in hr_response.json()}, {"annual", "medical"},
+        )
+
+        employee_client = APIClient()
+        employee_client.force_authenticate(self.employee_user)
+        employee_response = employee_client.get("/api/v1/leave-types/")
+        self.assertEqual(employee_response.status_code, 200)
+        self.assertEqual({item["key"] for item in employee_response.json()}, {"annual"})
+
+        admin = get_user_model().objects.create_user(username="leave-type-read-admin")
+        RoleAssignment.objects.create(
+            user=admin, role=RoleAssignment.ROLE_ADMIN, scope=RoleAssignment.SCOPE_GLOBAL,
+        )
+        admin_client = APIClient()
+        admin_client.force_authenticate(admin)
+        admin_response = admin_client.get("/api/v1/leave-types/")
+        self.assertEqual(admin_response.status_code, 200)
+        self.assertEqual(
+            {item["key"] for item in admin_response.json()},
+            {"annual", "medical", disabled.key},
+        )
+
+    def test_leave_type_mutations_without_reason_and_hr_self_grant_are_denied(self):
+        admin = get_user_model().objects.create_user(username="reason-required-admin")
+        RoleAssignment.objects.create(
+            user=admin, role=RoleAssignment.ROLE_ADMIN, scope=RoleAssignment.SCOPE_GLOBAL,
+        )
+        admin_client = APIClient()
+        admin_client.force_authenticate(admin)
+        audit_count = AuditEvent.objects.filter(entity="LeaveType").count()
+        missing_reason = admin_client.patch(
+            f"/api/v1/leave-types/{self.leave_type.pk}/",
+            {"requiresApproval": False},
+            format="json",
+        )
+        self.assertEqual(missing_reason.status_code, 400)
+        self.leave_type.refresh_from_db()
+        self.assertTrue(self.leave_type.requires_approval)
+        self.assertEqual(AuditEvent.objects.filter(entity="LeaveType").count(), audit_count)
+
+        self_grant = self.client.post(
+            "/api/v1/admin/role-assignments/",
+            {
+                "userId": self.hr_user.pk, "role": "admin", "scope": "global",
+                "permission": MANAGE_GLOBAL_LEAVE_TYPES,
+            },
+            format="json",
+        )
+        self.assertEqual(self_grant.status_code, 403)
+        self.assertFalse(RoleAssignment.objects.filter(
+            user=self.hr_user, role=RoleAssignment.ROLE_ADMIN, is_active=True,
+        ).exists())
+        with self.assertRaises(PermissionDenied):
+            grant_role_assignment(
+                actor=self.hr_user, user_id=self.hr_user.pk,
+                role=RoleAssignment.ROLE_ADMIN, scope=RoleAssignment.SCOPE_GLOBAL,
+            )
+        with self.assertRaises(PermissionDenied):
+            save_leave_type(
+                actor=self.hr_user, leave_type_id=self.leave_type.pk,
+                data={"confidential": True}, reason="attempted service bypass",
+            )
+        self.leave_type.refresh_from_db()
+        self.assertFalse(self.leave_type.confidential)
 
     def test_hr_pages_read_real_leave_and_organization_data(self):
         entitlement = create_entitlement(
@@ -130,6 +402,122 @@ class FrontendApiTests(TestCase):
             self.client.get(f"/api/v1/employees/{self.employee.pk}/contract-periods/").json()[0]["workDays"],
             [5, 6, 0, 1, 2],
         )
+
+    def test_employee_api_status_uses_effective_employment_dates(self):
+        today = organization_localdate()
+        self.employee.end_date = today + dt.timedelta(days=2)
+        self.employee.save(update_fields=["end_date"])
+        future = EmployeeProfile.objects.create(
+            user=get_user_model().objects.create_user(username="api-future-hire"),
+            company=self.company, department=self.department, personnel_code="API-FUTURE",
+            start_date=today + dt.timedelta(days=1),
+        )
+        suspended = EmployeeProfile.objects.create(
+            user=get_user_model().objects.create_user(username="api-suspended"),
+            company=self.company, department=self.department, personnel_code="API-SUSPENDED",
+            start_date=today - dt.timedelta(days=1),
+            account_status=EmployeeProfile.ACCOUNT_SUSPENDED,
+        )
+
+        employees = {
+            row["id"]: row for row in self.client.get("/api/v1/employees/").json()
+        }
+
+        self.assertTrue(employees[self.employee.pk]["isActive"])
+        self.assertFalse(employees[future.pk]["isActive"])
+        self.assertFalse(employees[suspended.pk]["isActive"])
+
+    def test_coverage_headcount_is_effective_for_each_day_including_history(self):
+        today = organization_localdate()
+        yesterday = today - dt.timedelta(days=1)
+        tomorrow = today + dt.timedelta(days=1)
+        self.employee.end_date = today
+        self.employee.save(update_fields=["end_date"])
+
+        starts_today = EmployeeProfile.objects.create(
+            user=get_user_model().objects.create_user(username="coverage-start-today"),
+            company=self.company, department=self.department, personnel_code="COV-TODAY",
+            start_date=today, end_date=today,
+        )
+        starts_tomorrow = EmployeeProfile.objects.create(
+            user=get_user_model().objects.create_user(username="coverage-future-start"),
+            company=self.company, department=self.department, personnel_code="COV-FUTURE",
+            start_date=tomorrow,
+        )
+        future_end = EmployeeProfile.objects.create(
+            user=get_user_model().objects.create_user(username="coverage-future-end"),
+            company=self.company, department=self.department, personnel_code="COV-END",
+            start_date=yesterday - dt.timedelta(days=2), end_date=tomorrow,
+        )
+        past_end = EmployeeProfile.objects.create(
+            user=get_user_model().objects.create_user(username="coverage-past-end"),
+            company=self.company, department=self.department, personnel_code="COV-PAST",
+            start_date=yesterday - dt.timedelta(days=2), end_date=yesterday - dt.timedelta(days=1),
+        )
+
+        with CaptureQueriesContext(connection) as one_day_queries:
+            one_day_response = self.client.get(
+                f"/api/v1/coverage/?from={today.isoformat()}&to={today.isoformat()}",
+            )
+        with CaptureQueriesContext(connection) as three_day_queries:
+            response = self.client.get(
+                f"/api/v1/coverage/?from={yesterday.isoformat()}&to={tomorrow.isoformat()}",
+            )
+        self.assertEqual(one_day_response.status_code, 200, one_day_response.content)
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertEqual(len(three_day_queries), len(one_day_queries))
+        headcount_by_date = {row["date"]: row["headcount"] for row in response.json()}
+
+        self.assertEqual(headcount_by_date[yesterday.isoformat()], 3)
+        self.assertEqual(headcount_by_date[today.isoformat()], 4)
+        self.assertEqual(headcount_by_date[tomorrow.isoformat()], 3)
+        self.assertEqual(EmployeeProfile.objects.filter(pk__in=[
+            starts_today.pk, starts_tomorrow.pk, future_end.pk, past_end.pk,
+        ]).count(), 4)
+
+    def test_coverage_uses_audited_status_as_of_each_historical_day(self):
+        today = organization_localdate()
+        yesterday = today - dt.timedelta(days=1)
+        suspend_employee(employee_id=self.employee.pk, actor=self.hr_user)
+
+        response = self.client.get(
+            f"/api/v1/coverage/?from={yesterday.isoformat()}&to={today.isoformat()}",
+        )
+
+        self.assertEqual(response.status_code, 200, response.content)
+        headcount_by_date = {row["date"]: row["headcount"] for row in response.json()}
+        self.assertEqual(headcount_by_date[yesterday.isoformat()], 2)
+        self.assertEqual(headcount_by_date[today.isoformat()], 1)
+
+    def test_historical_report_population_excludes_future_and_former_employees(self):
+        SystemSetting.objects.create(key="privacy.min_group_size", value=2)
+        today = organization_localdate()
+        former_user = get_user_model().objects.create_user(username="report-former")
+        former = EmployeeProfile.objects.create(
+            user=former_user, company=self.company, department=self.department,
+            personnel_code="REPORT-FORMER", start_date=today - dt.timedelta(days=10),
+            end_date=today - dt.timedelta(days=1),
+        )
+        for employee in (self.employee, former):
+            LeaveRequest.objects.create(
+                employee=employee, leave_type=self.leave_type,
+                start_date=today - dt.timedelta(days=5),
+                end_date=today - dt.timedelta(days=5),
+                working_days=Decimal("1"), status="APPROVED",
+            )
+
+        response = self.client.get("/api/v1/reports/absences")
+        bradford = self.client.get("/api/v1/reports/bradford")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["series"], [])
+        self.assertEqual(bradford.status_code, 409)
+        self.assertEqual(bradford.json()["status"], "configuration_error")
+        self.assertEqual(
+            bradford.json()["emptyStateReason"],
+            "bradford_policy_not_configured",
+        )
+        self.assertEqual(LeaveRequest.objects.filter(employee__in=(self.employee, former)).count(), 2)
 
     def test_confidential_balances_require_hr_scope(self):
         create_entitlement(
@@ -346,16 +734,230 @@ class FrontendApiTests(TestCase):
         self.assertEqual(self.client.get("/api/v1/hr/bradford-notes/").json()[0]["body"],
                          "Reviewed with employee")
 
+    def test_company_scope_rejects_foreign_hr_targets_without_side_effects(self):
+        other_company = Company.objects.create(code="SCOPE-B", name="Scope company B")
+        other_user = get_user_model().objects.create_user(username="scope-company-b")
+        other_employee = EmployeeProfile.objects.create(
+            user=other_user, company=other_company, personnel_code="SCOPE-B-1",
+            start_date=dt.date(2020, 1, 1),
+        )
+        entitlement = create_entitlement(
+            employee=other_employee, leave_type=self.leave_type, year=1405,
+            base_days=Decimal("12"), actor=self.hr_user, reason="opening",
+            idempotency_key="scope-company-opening",
+        )
+        BradfordNote.objects.create(
+            employee=other_employee, body="Private company B note", updated_by=self.hr_user,
+        )
+        event_count = EntitlementEvent.objects.count()
+        audit_count = AuditEvent.objects.count()
+
+        adjustment = self.client.post(
+            f"/api/v1/entitlements/{entitlement.pk}/adjust",
+            {"days": "2", "reason": "out of scope"}, format="json",
+        )
+        self.assertEqual(adjustment.status_code, 404)
+        entitlement.refresh_from_db()
+        self.assertEqual(entitlement.manual_adjustment, Decimal("0.0"))
+        self.assertEqual(EntitlementEvent.objects.count(), event_count)
+        self.assertEqual(AuditEvent.objects.count(), audit_count)
+
+        valid_csv = "personnel_code,type,year,days\nE-1,annual,1406,5\n"
+        preview = self.client.post(
+            "/api/v1/entitlements/import/?dry_run=1", {"csv": valid_csv}, format="json",
+        )
+        self.assertEqual(preview.json()["accepted"], 1)
+        crafted_csv = "personnel_code,type,year,days\nSCOPE-B-1,annual,1405,8\n"
+        commit = self.client.post(
+            "/api/v1/entitlements/import/", {"csv": crafted_csv}, format="json",
+        )
+        self.assertEqual(commit.status_code, 200)
+        self.assertEqual((commit.json()["accepted"], commit.json()["rejected"]), (0, 1))
+        self.assertFalse(LeaveEntitlement.objects.filter(
+            employee=other_employee, leave_type=self.leave_type, year=1406,
+        ).exists())
+        self.assertEqual(EntitlementEvent.objects.count(), event_count)
+        self.assertEqual(AuditEvent.objects.count(), audit_count)
+
+        notes = self.client.get("/api/v1/hr/bradford-notes/")
+        self.assertEqual(notes.status_code, 200)
+        self.assertEqual(notes.json(), [])
+        write_note = self.client.post(
+            "/api/v1/hr/bradford-notes/",
+            {"employeeId": other_employee.pk, "body": "ID substitution"}, format="json",
+        )
+        self.assertEqual(write_note.status_code, 404)
+        self.assertEqual(BradfordNote.objects.get(employee=other_employee).body,
+                         "Private company B note")
+
+    def test_department_scope_excludes_self_and_manager_union_for_hr_operations(self):
+        department_a = Department.objects.create(
+            company=self.company, code="SCOPE-A", name="Scope department A",
+        )
+        department_b = Department.objects.create(
+            company=self.company, code="SCOPE-B", name="Scope department B",
+        )
+        self.hr.department = department_b
+        self.hr.save(update_fields=["department"])
+        assignment = RoleAssignment.objects.get(user=self.hr_user, role=RoleAssignment.ROLE_HR)
+        assignment.scope = RoleAssignment.SCOPE_DEPARTMENT
+        assignment.department = department_a
+        assignment.save()
+        in_scope_user = get_user_model().objects.create_user(username="scope-dept-a")
+        in_scope_employee = EmployeeProfile.objects.create(
+            user=in_scope_user, company=self.company, department=department_a,
+            personnel_code="SCOPE-A-1", start_date=dt.date(2020, 1, 1),
+        )
+        report_user = get_user_model().objects.create_user(username="scope-direct-report")
+        report = EmployeeProfile.objects.create(
+            user=report_user, company=self.company, department=department_b,
+            manager=self.hr, personnel_code="SCOPE-B-2", start_date=dt.date(2020, 1, 1),
+        )
+        self.assertEqual(self.client.get("/api/v1/employees/").status_code, 200)
+        self.assertEqual(
+            {row["id"] for row in self.client.get("/api/v1/employees/").json()},
+            {self.hr.pk, in_scope_employee.pk, report.pk},
+        )
+        self.assertEqual(
+            authorization_context(self.hr_user).has_role("manager"), True,
+        )
+        self.assertEqual(
+            authorization_context(self.hr_user).has_role("hr"), True,
+        )
+        self.assertEqual(
+            authorization_context(self.hr_user).employee_id, self.hr.pk,
+        )
+
+        self_entitlement = create_entitlement(
+            employee=self.hr, leave_type=self.leave_type, year=1405,
+            base_days=Decimal("10"), actor=self.hr_user, reason="opening",
+            idempotency_key="scope-self-opening",
+        )
+        report_entitlement = create_entitlement(
+            employee=report, leave_type=self.leave_type, year=1405,
+            base_days=Decimal("10"), actor=self.hr_user, reason="opening",
+            idempotency_key="scope-report-opening",
+        )
+        BradfordNote.objects.create(employee=self.hr, body="self", updated_by=self.hr_user)
+        BradfordNote.objects.create(employee=report, body="report", updated_by=self.hr_user)
+        event_count = EntitlementEvent.objects.count()
+        audit_count = AuditEvent.objects.count()
+        note_count = BradfordNote.objects.count()
+
+        for entitlement in (self_entitlement, report_entitlement):
+            with self.subTest(employee=entitlement.employee_id):
+                response = self.client.post(
+                    f"/api/v1/entitlements/{entitlement.pk}/adjust",
+                    {"days": "1", "reason": "outside department"}, format="json",
+                )
+                self.assertEqual(response.status_code, 404)
+        preview = self.client.post(
+            "/api/v1/entitlements/import/?dry_run=1",
+            {"csv": "personnel_code,type,year,days\nSCOPE-B-2,annual,1406,5\n"},
+            format="json",
+        )
+        self.assertEqual((preview.json()["accepted"], preview.json()["rejected"]), (0, 1))
+        commit = self.client.post(
+            "/api/v1/entitlements/import/",
+            {"csv": "personnel_code,type,year,days\nSCOPE-B-2,annual,1406,5\n"},
+            format="json",
+        )
+        self.assertEqual((commit.json()["accepted"], commit.json()["rejected"]), (0, 1))
+        self.assertEqual(self.client.get("/api/v1/hr/bradford-notes/").json(), [])
+        for employee in (self.hr, report):
+            write = self.client.post(
+                "/api/v1/hr/bradford-notes/",
+                {"employeeId": employee.pk, "body": "outside department"}, format="json",
+            )
+            self.assertEqual(write.status_code, 404)
+        self.assertEqual(
+            self.client.get(f"/api/v1/employees/{report.pk}/contract-periods/").status_code,
+            404,
+        )
+        self.assertEqual(
+            self.client.get("/api/v1/coverage/?from=2026-11-02&to=2026-11-02").json(),
+            [{"date": "2026-11-02", "departmentName": department_a.name,
+              "awayCount": 0, "headcount": 1}],
+        )
+        self.assertEqual(EntitlementEvent.objects.count(), event_count)
+        self.assertEqual(AuditEvent.objects.count(), audit_count)
+        self.assertEqual(BradfordNote.objects.count(), note_count)
+        self_entitlement.refresh_from_db()
+        report_entitlement.refresh_from_db()
+        self.assertEqual(self_entitlement.manual_adjustment, Decimal("0.0"))
+        self.assertEqual(report_entitlement.manual_adjustment, Decimal("0.0"))
+        self.assertFalse(LeaveEntitlement.objects.filter(
+            employee=report, leave_type=self.leave_type, year=1406,
+        ).exists())
+
+    def test_hr_scope_and_explicit_admin_global_access_remain_authorized(self):
+        in_scope_entitlement = create_entitlement(
+            employee=self.employee, leave_type=self.leave_type, year=1405,
+            base_days=Decimal("10"), actor=self.hr_user, reason="opening",
+            idempotency_key="scope-allowed-opening",
+        )
+        adjustment = self.client.post(
+            f"/api/v1/entitlements/{in_scope_entitlement.pk}/adjust",
+            {"days": "2", "reason": "in scope"}, format="json",
+        )
+        self.assertEqual(adjustment.status_code, 200, adjustment.content)
+        allowed_import = self.client.post(
+            "/api/v1/entitlements/import/",
+            {"csv": "personnel_code,type,year,days\nE-1,annual,1406,5\n"},
+            format="json",
+        )
+        self.assertEqual(allowed_import.json()["accepted"], 1)
+        allowed_note = self.client.post(
+            "/api/v1/hr/bradford-notes/",
+            {"employeeId": self.employee.pk, "body": "in scope"}, format="json",
+        )
+        self.assertEqual(allowed_note.status_code, 200)
+        self.assertEqual(self.client.get("/api/v1/hr/bradford-notes/").json()[0]["body"],
+                         "in scope")
+
+        other_company = Company.objects.create(code="ADMIN-GLOBAL", name="Admin global")
+        other_user = get_user_model().objects.create_user(username="admin-global-target")
+        other_employee = EmployeeProfile.objects.create(
+            user=other_user, company=other_company, personnel_code="ADMIN-GLOBAL-1",
+            start_date=dt.date(2020, 1, 1),
+        )
+        other_entitlement = create_entitlement(
+            employee=other_employee, leave_type=self.leave_type, year=1405,
+            base_days=Decimal("10"), actor=self.hr_user, reason="opening",
+            idempotency_key="admin-global-opening",
+        )
+        admin = get_user_model().objects.create_superuser(
+            username="scope-global-admin", password="unused",
+        )
+        self.client.force_authenticate(admin)
+        admin_adjustment = self.client.post(
+            f"/api/v1/entitlements/{other_entitlement.pk}/adjust",
+            {"days": "1", "reason": "admin global"}, format="json",
+        )
+        self.assertEqual(admin_adjustment.status_code, 200, admin_adjustment.content)
+        admin_import = self.client.post(
+            "/api/v1/entitlements/import/",
+            {"csv": "personnel_code,type,year,days\nADMIN-GLOBAL-1,annual,1406,5\n"},
+            format="json",
+        )
+        self.assertEqual(admin_import.json()["accepted"], 1)
+        admin_note = self.client.post(
+            "/api/v1/hr/bradford-notes/",
+            {"employeeId": other_employee.pk, "body": "admin global"}, format="json",
+        )
+        self.assertEqual(admin_note.status_code, 200)
+        self.assertEqual(BradfordNote.objects.get(employee=other_employee).body, "admin global")
+
     def test_request_attachments_are_validated_and_downloaded_through_authorized_route(self):
         request = LeaveRequest.objects.create(
             employee=self.employee, leave_type=self.leave_type,
             start_date=dt.date(2026, 11, 2), end_date=dt.date(2026, 11, 2),
             working_days=Decimal("1"), status="PENDING",
         )
-        with tempfile.TemporaryDirectory() as media_root:
-            with override_settings(MEDIA_ROOT=media_root):
+        with tempfile.TemporaryDirectory() as attachment_root:
+            with override_settings(ZSH_ATTACHMENT_ROOT=attachment_root):
                 upload = SimpleUploadedFile(
-                    "evidence.pdf", b"%PDF-1.7\nprivate test attachment",
+                    "evidence.pdf", valid_pdf(),
                     content_type="application/pdf",
                 )
                 response = self.client.post(
@@ -367,7 +969,7 @@ class FrontendApiTests(TestCase):
                 self.assertEqual(listing.status_code, 200)
                 download = self.client.get(listing.json()[0]["downloadUrl"])
                 self.assertEqual(download.status_code, 200)
-                self.assertEqual(b"".join(download.streaming_content), b"%PDF-1.7\nprivate test attachment")
+                self.assertEqual(b"".join(download.streaming_content), valid_pdf())
 
                 invalid = SimpleUploadedFile(
                     "bad.pdf", b"not a pdf", content_type="application/pdf",
@@ -387,5 +989,18 @@ class FrontendApiTests(TestCase):
         settings_response = client.get("/api/v1/admin/settings/")
         self.assertEqual(settings_response.status_code, 200)
         self.assertIn("bradford.threshold_review", {row["key"] for row in settings_response.json()})
-        self.assertEqual(client.get("/api/v1/ready/").status_code, 200)
-        self.assertEqual(client.get("/api/v1/admin/jobs/").json(), [])
+        ready_response = client.get("/api/v1/ready/")
+        self.assertEqual(ready_response.status_code, 200, ready_response.content)
+        jobs_response = client.get("/api/v1/admin/jobs/")
+        self.assertEqual(jobs_response.status_code, 200)
+        self.assertEqual(
+            jobs_response.json()["scheduler"]["status"],
+            "scheduler_not_configured",
+        )
+        self.assertEqual(
+            {job["name"] for job in jobs_response.json()["jobs"]},
+            {
+                "overdue_escalation", "manager_reminders",
+                "carry_forward", "entitlement_expiration",
+            },
+        )

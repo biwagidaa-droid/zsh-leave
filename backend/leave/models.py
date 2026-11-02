@@ -2,13 +2,71 @@
 import uuid
 
 from django.conf import settings
-from django.db import models
+from django.db import models, transaction
 from django.db.models import Q
 
+from .attachment_storage import PrivateAttachmentStorage
 from zsh_core import workflow as wf
 
 STATUS_CHOICES = [(s, s) for s in (wf.PENDING, wf.ESCALATED, wf.APPROVED, wf.REJECTED,
                                    wf.CANCELLED, wf.WITHDRAWAL_PENDING)]
+
+
+class OrganizationalHierarchyQuerySet(models.QuerySet):
+    relationship_fields = {
+        "OrganizationSite": {"company", "company_id"},
+        "Department": {"company", "company_id", "parent", "parent_id"},
+        "EmployeeProfile": {
+            "company", "company_id", "site", "site_id", "department", "department_id",
+            "manager", "manager_id",
+        },
+    }
+
+    def update(self, **kwargs):
+        protected_fields = self.relationship_fields.get(self.model.__name__, set())
+        if protected_fields.intersection(kwargs):
+            from django.core.exceptions import ValidationError
+
+            raise ValidationError("Use model save or the hierarchy service to change organizational relationships")
+        return super().update(**kwargs)
+
+    def bulk_create(self, objs, **kwargs):
+        if kwargs.get("ignore_conflicts") or kwargs.get("update_conflicts"):
+            raise ValueError("Conflict-ignoring bulk writes cannot validate organizational relationships")
+        objects = list(objs)
+        with transaction.atomic():
+            for obj in objects:
+                obj.save(force_insert=True)
+        return objects
+
+    def bulk_update(self, objs, fields, batch_size=None):
+        protected_fields = self.relationship_fields.get(self.model.__name__, set())
+        if protected_fields.intersection(fields):
+            objects = list(objs)
+            with transaction.atomic():
+                for obj in objects:
+                    obj.save(update_fields=fields)
+            return len(objects)
+        return super().bulk_update(objs, fields, batch_size=batch_size)
+
+    def delete(self):
+        protected_fields = self.relationship_fields.get(self.model.__name__, set())
+        if not protected_fields:
+            return super().delete()
+        objects = list(self)
+        total_deleted = 0
+        deleted_by_model = {}
+        with transaction.atomic():
+            for obj in objects:
+                deleted, counts = obj.delete()
+                total_deleted += deleted
+                for model_name, count in counts.items():
+                    deleted_by_model[model_name] = deleted_by_model.get(model_name, 0) + count
+        return total_deleted, deleted_by_model
+
+
+class OrganizationalHierarchyManager(models.Manager.from_queryset(OrganizationalHierarchyQuerySet)):
+    pass
 
 
 class Company(models.Model):
@@ -18,6 +76,8 @@ class Company(models.Model):
 
 
 class OrganizationSite(models.Model):
+    objects = OrganizationalHierarchyManager()
+
     company = models.ForeignKey(Company, on_delete=models.PROTECT, related_name="sites")
     code = models.CharField(max_length=32)
     name = models.CharField(max_length=200)
@@ -28,18 +88,94 @@ class OrganizationSite(models.Model):
             models.UniqueConstraint(fields=["company", "code"], name="uniq_site_code_in_company"),
         ]
 
+    def clean(self):
+        from django.core.exceptions import ValidationError
+
+        if self.pk is not None:
+            original_company_id = OrganizationSite.objects.filter(pk=self.pk).values_list(
+                "company_id", flat=True,
+            ).first()
+            if original_company_id is not None and original_company_id != self.company_id:
+                raise ValidationError({
+                    "company": "مالکیت سایت پس از ایجاد قابل تغییر نیست؛ برای انتقال، سایت جدید بسازید",
+                })
+
+    def save(self, *args, **kwargs):
+        from .hierarchy_services import lock_organizational_hierarchy
+
+        with transaction.atomic():
+            lock_organizational_hierarchy()
+            self.full_clean()
+            return super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        from .hierarchy_services import lock_organizational_hierarchy
+
+        with transaction.atomic():
+            lock_organizational_hierarchy()
+            return super().delete(*args, **kwargs)
+
 
 class Department(models.Model):
+    objects = OrganizationalHierarchyManager()
+
     company = models.ForeignKey(Company, on_delete=models.PROTECT)
     parent = models.ForeignKey("self", null=True, blank=True, on_delete=models.PROTECT)
     code = models.CharField(max_length=32)
     name = models.CharField(max_length=200)
 
     class Meta:
-        constraints = [models.UniqueConstraint(fields=["company", "code"], name="uniq_dept_code_in_company")]
+        constraints = [
+            models.UniqueConstraint(fields=["company", "code"], name="uniq_dept_code_in_company"),
+            models.CheckConstraint(
+                condition=Q(parent__isnull=True) | ~Q(parent=models.F("id")),
+                name="department_parent_not_self",
+            ),
+        ]
+
+    def clean(self):
+        from .hierarchy_services import validate_department_relationships
+
+        validate_department_relationships(self)
+
+    def save(self, *args, **kwargs):
+        from .hierarchy_services import lock_organizational_hierarchy
+
+        with transaction.atomic():
+            lock_organizational_hierarchy()
+            self.full_clean()
+            return super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        from .hierarchy_services import lock_organizational_hierarchy
+
+        with transaction.atomic():
+            lock_organizational_hierarchy()
+            return super().delete(*args, **kwargs)
 
 
 class EmployeeProfile(models.Model):
+    objects = OrganizationalHierarchyManager()
+
+    ACCOUNT_CREATED = "created"
+    INVITATION_PENDING = "invitation_pending"
+    INVITATION_SENT = "invitation_sent"
+    INVITATION_EXPIRED = "invitation_expired"
+    INVITATION_REVOKED = "invitation_revoked"
+    ACCOUNT_ACTIVATED = "account_activated"
+    ACCOUNT_SUSPENDED = "account_suspended"
+    ACCOUNT_OFFBOARDED = "account_offboarded"
+    ACCOUNT_STATUS_CHOICES = [
+        (ACCOUNT_CREATED, "Employee record created"),
+        (INVITATION_PENDING, "Invitation pending"),
+        (INVITATION_SENT, "Invitation sent"),
+        (INVITATION_EXPIRED, "Invitation expired"),
+        (INVITATION_REVOKED, "Invitation revoked"),
+        (ACCOUNT_ACTIVATED, "Account activated"),
+        (ACCOUNT_SUSPENDED, "Account suspended"),
+        (ACCOUNT_OFFBOARDED, "Account offboarded"),
+    ]
+
     user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.PROTECT)
     company = models.ForeignKey(Company, on_delete=models.PROTECT)
     site = models.ForeignKey(OrganizationSite, null=True, blank=True, on_delete=models.PROTECT)
@@ -50,12 +186,89 @@ class EmployeeProfile(models.Model):
     start_date = models.DateField()
     end_date = models.DateField(null=True, blank=True)
     is_employee = models.BooleanField(default=True)   # حساب سرویس/مهمان = False
+    account_status = models.CharField(
+        max_length=24, choices=ACCOUNT_STATUS_CHOICES, default=ACCOUNT_ACTIVATED,
+    )
+    email_verified_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         constraints = [
             models.UniqueConstraint(fields=["company", "personnel_code"], name="uniq_personnel_code"),
             models.CheckConstraint(condition=~Q(manager=models.F("id")), name="manager_not_self"),
         ]
+        indexes = [
+            models.Index(fields=["company", "site"], name="employee_company_site_idx"),
+        ]
+
+    def clean(self):
+        from .hierarchy_services import validate_employee_relationships
+
+        validate_employee_relationships(self)
+
+    def save(self, *args, **kwargs):
+        from .hierarchy_services import lock_organizational_hierarchy
+
+        with transaction.atomic():
+            lock_organizational_hierarchy()
+            self.full_clean()
+            return super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        from .hierarchy_services import lock_organizational_hierarchy
+
+        with transaction.atomic():
+            lock_organizational_hierarchy()
+            reports = EmployeeProfile.objects.select_for_update().filter(manager_id=self.pk)
+            for report in reports:
+                report.manager = None
+                report.save(update_fields=["manager"])
+            return super().delete(*args, **kwargs)
+
+
+class EmployeeInvitation(models.Model):
+    STATUS_PENDING = "pending"
+    STATUS_SENT = "sent"
+    STATUS_EXPIRED = "expired"
+    STATUS_REVOKED = "revoked"
+    STATUS_CONSUMED = "consumed"
+    STATUS_CHOICES = [
+        (STATUS_PENDING, "Pending"),
+        (STATUS_SENT, "Sent"),
+        (STATUS_EXPIRED, "Expired"),
+        (STATUS_REVOKED, "Revoked"),
+        (STATUS_CONSUMED, "Consumed"),
+    ]
+
+    PURPOSE_EMPLOYEE_ACTIVATION = "employee_activation"
+
+    employee = models.ForeignKey(
+        EmployeeProfile, on_delete=models.PROTECT, related_name="invitations",
+    )
+    token_hash = models.CharField(max_length=64, unique=True)
+    purpose = models.CharField(
+        max_length=32, default=PURPOSE_EMPLOYEE_ACTIVATION,
+        choices=[(PURPOSE_EMPLOYEE_ACTIVATION, "Employee account activation")],
+    )
+    email = models.EmailField(max_length=254)
+    status = models.CharField(max_length=16, choices=STATUS_CHOICES, default=STATUS_PENDING)
+    expires_at = models.DateTimeField()
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.PROTECT,
+        related_name="created_employee_invitations",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    sent_at = models.DateTimeField(null=True, blank=True)
+    consumed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["employee"],
+                condition=Q(status__in=["pending", "sent"]),
+                name="one_active_employee_invitation",
+            ),
+        ]
+        indexes = [models.Index(fields=["employee", "status"], name="invite_emp_status_idx")]
 
 
 class RoleAssignment(models.Model):
@@ -538,19 +751,50 @@ class LeaveRequestComment(_AppendOnly):
 
 
 def attachment_upload_path(instance, filename):
-    name = filename.replace("\\", "/").rsplit("/", 1)[-1]
-    extension = name.rsplit(".", 1)[-1].lower() if "." in name else ""
+    extension = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
     if extension not in {"pdf", "png", "jpg", "jpeg"}:
-        extension = "bin"
+        raise ValueError("Unsupported attachment extension.")
     return f"leave-attachments/{instance.request_id}/{uuid.uuid4().hex}.{extension}"
 
 
 class LeaveRequestAttachment(models.Model):
+    SCAN_UNSCANNED = "unscanned"
+    SCAN_CLEAN = "clean"
+    SCAN_STATUS_CHOICES = [
+        (SCAN_UNSCANNED, "Unscanned"),
+        (SCAN_CLEAN, "Clean"),
+    ]
+    DELETION_ACTIVE = "active"
+    DELETION_PENDING = "pending"
+    DELETION_DELETED = "deleted"
+    DELETION_STATUS_CHOICES = [
+        (DELETION_ACTIVE, "Active"),
+        (DELETION_PENDING, "Deletion pending"),
+        (DELETION_DELETED, "Deleted"),
+    ]
+
     request = models.ForeignKey(LeaveRequest, on_delete=models.PROTECT, related_name="attachments")
-    file = models.FileField(upload_to=attachment_upload_path)
+    file = models.FileField(
+        upload_to=attachment_upload_path,
+        storage=PrivateAttachmentStorage(),
+    )
     file_name = models.CharField(max_length=255)
     content_type = models.CharField(max_length=100)
     file_size = models.PositiveBigIntegerField()
+    scan_status = models.CharField(
+        max_length=16, choices=SCAN_STATUS_CHOICES, default=SCAN_UNSCANNED,
+    )
+    deletion_status = models.CharField(
+        max_length=16, choices=DELETION_STATUS_CHOICES, default=DELETION_ACTIVE,
+    )
+    legal_hold = models.BooleanField(default=False)
+    deletion_requested_at = models.DateTimeField(null=True, blank=True)
+    deleted_at = models.DateTimeField(null=True, blank=True)
+    deleted_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True,
+        on_delete=models.PROTECT, related_name="deleted_attachments",
+    )
+    deletion_reason = models.CharField(max_length=500, blank=True)
     uploaded_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT)
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -624,6 +868,8 @@ class AuditEvent(_AppendOnly):
     after = models.JSONField(null=True)
     reason = models.TextField(blank=True)
     result = models.CharField(max_length=16, default="ok")
+    correlation_id = models.CharField(max_length=128, blank=True)
+    source = models.CharField(max_length=128, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
 
@@ -633,6 +879,54 @@ class SystemSetting(models.Model):
     value = models.JSONField(null=True)
     updated_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, on_delete=models.PROTECT)
     updated_at = models.DateTimeField(auto_now=True)
+
+
+class JobExecution(models.Model):
+    STATUS_QUEUED = "queued"
+    STATUS_RUNNING = "running"
+    STATUS_SUCCEEDED = "succeeded"
+    STATUS_PARTIAL_FAILURE = "partial_failure"
+    STATUS_FAILED = "failed"
+    STATUS_CHOICES = [
+        (STATUS_QUEUED, "Queued"),
+        (STATUS_RUNNING, "Running"),
+        (STATUS_SUCCEEDED, "Succeeded"),
+        (STATUS_PARTIAL_FAILURE, "Partial failure"),
+        (STATUS_FAILED, "Failed"),
+    ]
+
+    job_name = models.CharField(max_length=64)
+    scheduled_for = models.DateTimeField()
+    started_at = models.DateTimeField(null=True, blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    status = models.CharField(max_length=24, choices=STATUS_CHOICES, default=STATUS_QUEUED)
+    attempt_count = models.PositiveSmallIntegerField(default=0)
+    retry_after = models.DateTimeField(null=True, blank=True)
+    result_summary = models.JSONField(default=dict)
+    error_code = models.CharField(max_length=64, blank=True)
+    correlation_id = models.CharField(max_length=128, default=uuid.uuid4)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["job_name", "scheduled_for"], name="uniq_job_execution_schedule",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["job_name", "-scheduled_for"], name="job_exec_name_sched_idx"),
+            models.Index(fields=["status", "retry_after"], name="job_exec_status_retry_idx"),
+        ]
+
+
+class JobEffect(models.Model):
+    job_name = models.CharField(max_length=64)
+    effect_key = models.CharField(max_length=255, unique=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+
+class SchedulerHeartbeat(models.Model):
+    name = models.CharField(max_length=64, unique=True)
+    checked_at = models.DateTimeField()
 
 
 class PublicHoliday(models.Model):

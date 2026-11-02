@@ -1,12 +1,66 @@
 """سرویس‌های داشبورد مدیریت: تنظیمات و تعطیلات. هر تغییر اعتبارسنجی، تراکنشی و حسابرسی می‌شود."""
 from __future__ import annotations
 
+from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
 
 from zsh_core import holidays as H
 from zsh_core import settings_schema as S
 from zsh_core.policy import LeavePolicy
-from .models import AuditEvent, PublicHoliday, PublicHolidayHistory, SystemSetting
+from . import audit_services
+from .authorization import MANAGE_GLOBAL_LEAVE_TYPES, authorization_context, has_permission
+from .models import LeaveType, PublicHoliday, PublicHolidayHistory, SystemSetting
+
+LEAVE_TYPE_FIELDS = {
+    "key": "key",
+    "labelFa": "label_fa",
+    "color": "color",
+    "countsAgainstBalance": "counts_against_balance",
+    "requiresApproval": "requires_approval",
+    "requiresNote": "requires_note",
+    "requiresReplacement": "requires_replacement",
+    "employeeRequestable": "employee_requestable",
+    "confidential": "confidential",
+    "enabled": "enabled",
+    "sortOrder": "sort_order",
+}
+
+
+@transaction.atomic
+def save_leave_type(*, actor, leave_type_id: int | None, data: dict,
+                    reason: str, correlation_id: str = "") -> LeaveType:
+    if not has_permission(
+        authorization_context(actor), MANAGE_GLOBAL_LEAVE_TYPES,
+    ):
+        raise PermissionDenied("مدیریت سراسری انواع مرخصی مجاز نیست")
+    if not isinstance(data, dict) or not data or set(data) - (set(LEAVE_TYPE_FIELDS) | {"reason"}):
+        raise ValidationError("فیلدهای نوع مرخصی معتبر نیست")
+    if not isinstance(reason, str) or not reason.strip():
+        raise ValidationError({"reason": "دلیل تغییر الزامی است"})
+    if not isinstance(correlation_id, str) or len(correlation_id) > 128:
+        raise ValidationError({"correlationId": "شناسه همبستگی معتبر نیست"})
+
+    item = (
+        LeaveType.objects.select_for_update().get(pk=leave_type_id)
+        if leave_type_id is not None
+        else LeaveType()
+    )
+    before = audit_services.snapshot(item) if item.pk is not None else None
+    for api_key, model_key in LEAVE_TYPE_FIELDS.items():
+        if api_key in data:
+            setattr(item, model_key, data[api_key])
+    item.full_clean()
+    item.save()
+    audit_services.record_model_change(
+        actor=actor,
+        action="leave_type.create" if before is None else "leave_type.update",
+        instance=item,
+        origin="admin",
+        before=before,
+        reason=reason.strip(),
+        correlation_id=correlation_id,
+    )
+    return item
 
 
 def load_settings() -> dict:
@@ -33,9 +87,11 @@ def set_setting(*, user, key: str, value, reason: str) -> dict:
     before = obj.value
     obj.value, obj.updated_by = S.to_storable(normalized), user
     obj.save()
-    AuditEvent.objects.create(actor=user, origin="admin", action="setting.update",
-                              entity="SystemSetting", entity_id=key,
-                              before={"value": before}, after={"value": obj.value}, reason=reason)
+    audit_services.record_audit(
+        actor=user, origin="admin", action="setting.update",
+        entity="SystemSetting", entity_id=key,
+        before={"value": before}, after={"value": obj.value}, reason=reason,
+    )
     return {key: normalized}
 
 
@@ -63,8 +119,9 @@ def add_holiday(*, user, scope: str, label: str, jalali_text: str, recurring: bo
                                      label=entry.label, created_by=user, updated_by=user)
     PublicHolidayHistory.objects.create(holiday_id=h.pk, action="create", before=None,
                                         after=_snapshot(h), actor=user)
-    AuditEvent.objects.create(actor=user, origin="admin", action="holiday.create",
-                              entity="PublicHoliday", entity_id=str(h.pk), after=_snapshot(h))
+    audit_services.record_model_change(
+        actor=user, origin="admin", action="holiday.create", instance=h,
+    )
     return h
 
 
@@ -84,7 +141,7 @@ def update_holiday(*, user, holiday_id: int, scope: str, label: str,
         1403, *(item.jalali_year for item in existing if item.jalali_year is not None),
     }
     H.check_duplicates(existing + [entry], years)
-    before = _snapshot(holiday)
+    before = audit_services.snapshot(holiday)
     holiday.scope = entry.scope
     holiday.jalali_year = entry.jalali_year
     holiday.jalali_month = entry.jalali_month
@@ -92,13 +149,13 @@ def update_holiday(*, user, holiday_id: int, scope: str, label: str,
     holiday.label = entry.label
     holiday.updated_by = user
     holiday.save()
-    after = _snapshot(holiday)
+    after = audit_services.snapshot(holiday)
     PublicHolidayHistory.objects.create(
         holiday_id=holiday.pk, action="update", before=before, after=after, actor=user,
     )
-    AuditEvent.objects.create(
-        actor=user, origin="admin", action="holiday.update", entity="PublicHoliday",
-        entity_id=str(holiday.pk), before=before, after=after, reason=reason,
+    audit_services.record_model_change(
+        actor=user, origin="admin", action="holiday.update", instance=holiday,
+        before=before, reason=reason,
     )
     return holiday
 
@@ -108,15 +165,20 @@ def delete_holiday(*, user, holiday_id: int, reason: str) -> None:
     if not (reason or "").strip():
         raise H.HolidayError("درج دلیل حذف الزامی است")
     h = PublicHoliday.objects.select_for_update().get(pk=holiday_id)
-    snap = _snapshot(h)
-    PublicHolidayHistory.objects.create(
-        holiday_id=h.pk, action="deactivate", before=snap, after={**snap, "is_active": False}, actor=user,
-    )
-    AuditEvent.objects.create(actor=user, origin="admin", action="holiday.deactivate",
-                              entity="PublicHoliday", entity_id=str(h.pk), before=snap, reason=reason)
+    history_before = _snapshot(h)
+    before = audit_services.snapshot(h)
     h.is_active = False
     h.updated_by = user
     h.save(update_fields=["is_active", "updated_by", "updated_at"])
+    after = audit_services.snapshot(h)
+    PublicHolidayHistory.objects.create(
+        holiday_id=h.pk, action="deactivate", before=history_before,
+        after=_snapshot(h), actor=user,
+    )
+    audit_services.record_model_change(
+        actor=user, origin="admin", action="holiday.deactivate", instance=h,
+        before=before, reason=reason,
+    )
 
 
 def entries_for(scopes) -> list[H.HolidayEntry]:

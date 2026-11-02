@@ -2,7 +2,7 @@
 
 ## فاز فعلی
 
-فاز ۳ — چرخه استخدام و offboarding: شروع‌نشده. آخرین فازهای تکمیل‌شده: فاز ۰، فاز ۱ و فاز ۲.
+فاز ۳ — چرخه استخدام و offboarding: **BLOCKED / NOT VERIFIED**. بررسی مستقل نشان داد تغییر اولیه فقط مدل بود، بدون migration یا اتصال به مجوزها؛ آن تغییر ناقص حذف شد. هنوز سرویس مرکزی وضعیت استخدام، offboarding، rehire و regression test چرخه استخدام پیاده‌سازی نشده است. آخرین فازهای تکمیل‌شده: فاز ۰، فاز ۱، فاز ۲ و فاز مجوز کاتالوگ سراسری LeaveType.
 
 ## تکمیل‌شده
 
@@ -39,14 +39,22 @@
 
 ## موانع شناخته‌شده
 
+- چرخه استخدام هنوز در authorization اعمال نمی‌شود: در probe، پروفایل با `end_date=2026-10-31` و کاربر `is_active=True` در تاریخ 2026-11-01 همچنان نقش employee و manager داشت و مجاز به تصمیم‌گیری روی درخواست در انتظار بود. کاربر غیرفعال رد شد؛ این به‌تنهایی انقضای استخدام را پوشش نمی‌دهد.
+- سیاست پیشنهادی برای پیاده‌سازی: `end_date` روز پایانی اشتغال و **شامل همان روز** است؛ تاریخ جاری باید از `timezone.localdate()` با timezone تنظیم‌شده (`Asia/Tehran`) گرفته شود. این سیاست هنوز در کد اجرا نمی‌شود.
+- تعلیق/خاتمه صریح، سیاست درخواست‌های در انتظار هنگام offboarding، rehire با حفظ دوره‌های قبلی، و audit غیرقابل‌حذف هنوز پیاده‌سازی نشده‌اند.
+- معماری احراز هویت فعلی فقط Django database session دارد؛ refresh token و API token یافت نشد. session version یا سرویس ابطال نشست در کد وجود ندارد. محدودکردن دسترسی در هر درخواست شدنی است، اما invalidation واقعی نشست‌های موجود باید جداگانه طراحی و آزموده شود.
 - PostgreSQL در این محیط validate نشد؛ `pg_isready` نصب نیست و تست‌ها SQLite هستند.
 - scheduler وجود ندارد، Bradford endpoint placeholder است و export API در routeها یافت نشد.
 - چرخه استخدام، activation، ممیزی کامل RBAC/audit، PostgreSQL compatibility و production deployment هنوز تکمیل/تأیید نشده‌اند.
 
-## گام بعدی دقیق
+## شواهد راستی‌آزمایی مستقل فاز ۳
 
-1. جست‌وجو و trace تمام authorization checks که `EmployeeProfile.is_employee` یا `User.is_active` را مصرف می‌کنند؛ رفتار `end_date` و شروع آینده را در model/API فعلی reproduce کنید.
-2. یک helper مرکزی وضعیت مؤثر استخدام تعریف کنید و آن را به مسیر authorization مرکزی متصل کنید، بدون تغییر زودهنگام User admin برای HR.
-3. regression tests برای اشتغال فعال، پایان آینده، پایان گذشته، profile غیرفعال و managerهای پایان‌یافته اضافه کنید.
-4. تست‌های backend متمرکز، سپس full suite و migration check اجرا کنید؛ migration فقط در صورت نیاز schema و با مسیر سازگار افزوده شود.
-5. شواهد و فایل‌های این پوشه را با نتایج واقعی به‌روز کنید و سپس فاز ۴ را شروع کنید.
+- Diff اولیه فقط `session_version` و مدل بدون استفاده `EmploymentPeriod` را اضافه می‌کرد؛ هیچ migration تولید نشده بود. اجرای اولیه تست‌ها با ۲۶ خطای `OperationalError: table leave_employeeprofile has no column named session_version` شکست خورد. تغییر ناقص حذف شد تا schema و تست‌ها دوباره با هم سازگار باشند.
+- `cd backend && DJANGO_SETTINGS_MODULE=config.settings_test python3 manage.py test leave.tests.test_authorized_services leave.tests.test_frontend_api leave.tests.test_workflow_api`: **exit 0، ۲۶ آزمون، ۰ شکست**.
+- `cd backend && DJANGO_SETTINGS_MODULE=config.settings_test python3 manage.py test leave.tests.test_workflow_api.LeaveWorkflowApiTests.test_hr_absence_rejects_unauthorized_and_rolls_back_invalid_submission`: **exit 0، ۱ آزمون، ۰ شکست**؛ درخواست نامجاز و خارج از دامنه 403/404 و ورودی نامعتبر 422 گرفتند؛ تست تعداد درخواست، رویداد، audit و idempotency را صفر assert می‌کند.
+- `cd backend && DJANGO_SETTINGS_MODULE=config.settings_test python3 manage.py check`: **exit 0**، بدون خطای check. Test runner اخطار شناخته‌شده SQLite برای `nulls_distinct` در `PublicHoliday` نشان داد.
+- `cd backend && DJANGO_SETTINGS_MODULE=config.settings_test python3 manage.py makemigrations --check --dry-run`: **exit 0**، تغییری شناسایی نشد.
+- probe موقت با SQLite موقت و حذف فایل پس از اجرا: employee مجاز فعلی `True`؛ employee منقضی `True`؛ manager منقضی `True`؛ اختیار تصمیم مدیر منقضی `True` (bypass تأییدشده)؛ کاربر `is_active=False` رد شد؛ probe هیچ تغییری در وضعیت درخواست `PENDING` ایجاد نکرد.
+- `git diff --check`: **exit 0**.
+
+نتایج بالا صحت lifecycle را تأیید نمی‌کنند؛ برعکس، bypass را بازتولید می‌کنند. فاز ۳ تا پیاده‌سازی سرویس/مجوز، migration/backfill در صورت نیاز، سیاست درخواست‌های در انتظار و regression testهای کامل باید باز بماند.

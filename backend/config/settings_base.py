@@ -1,4 +1,5 @@
 import os
+from ipaddress import ip_network
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -15,6 +16,11 @@ def env(name: str, default: str | None = None, required: bool = False) -> str:
 SECRET_KEY = env("ZSH_SECRET_KEY", "dev-only-secret-key-change-me")
 DEBUG = env("ZSH_DEBUG", "0").lower() in {"1", "true", "yes", "on"}
 ALLOWED_HOSTS = [host.strip() for host in env("ZSH_ALLOWED_HOSTS", "localhost,127.0.0.1").split(",") if host.strip()]
+ZSH_TRUSTED_PROXY_NETWORKS = tuple(
+    ip_network(value.strip(), strict=False)
+    for value in env("ZSH_TRUSTED_PROXY_IPS", "").split(",")
+    if value.strip()
+)
 
 INSTALLED_APPS = [
     "django.contrib.admin",
@@ -29,9 +35,11 @@ INSTALLED_APPS = [
 ]
 
 MIDDLEWARE = [
+    "leave.middleware.TrustedProxySSLHeaderMiddleware",
     "django.middleware.security.SecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
+    "leave.middleware.AuditContextMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
@@ -92,6 +100,32 @@ AUTH_PASSWORD_VALIDATORS = [
     },
 ]
 
+EMAIL_BACKEND = env(
+    "ZSH_EMAIL_BACKEND",
+    "django.core.mail.backends.smtp.EmailBackend",
+)
+EMAIL_HOST = env("ZSH_EMAIL_HOST", "")
+EMAIL_PORT = int(env("ZSH_EMAIL_PORT", "587"))
+EMAIL_HOST_USER = env("ZSH_EMAIL_USER", "")
+EMAIL_HOST_PASSWORD = env("ZSH_EMAIL_PASSWORD", "")
+EMAIL_USE_TLS = env("ZSH_EMAIL_USE_TLS", "1").lower() in {"1", "true", "yes", "on"}
+EMAIL_USE_SSL = env("ZSH_EMAIL_USE_SSL", "0").lower() in {"1", "true", "yes", "on"}
+if EMAIL_USE_TLS and EMAIL_USE_SSL:
+    raise RuntimeError("Enable either ZSH_EMAIL_USE_TLS or ZSH_EMAIL_USE_SSL, not both.")
+DEFAULT_FROM_EMAIL = env("ZSH_DEFAULT_FROM_EMAIL", "")
+ZSH_EMAIL_ENABLED = env("ZSH_EMAIL_ENABLED", "0").lower() in {"1", "true", "yes", "on"}
+ZSH_INVITATION_TOKEN_TTL_HOURS = int(env("ZSH_INVITATION_TOKEN_TTL_HOURS", "72"))
+ZSH_INVITATION_EXPOSE_DEV_LINKS = (
+    env("ZSH_INVITATION_EXPOSE_DEV_LINKS", "0").lower() in {"1", "true", "yes", "on"}
+)
+ZSH_PUBLIC_BASE_URL = env("ZSH_PUBLIC_BASE_URL", "")
+ZSH_JOB_SCHEDULER_ENABLED = env("ZSH_JOB_SCHEDULER_ENABLED", "0").lower() in {
+    "1", "true", "yes", "on",
+}
+ZSH_JOB_SCHEDULER_REQUIRED = False
+if ZSH_INVITATION_TOKEN_TTL_HOURS < 1:
+    raise RuntimeError("ZSH_INVITATION_TOKEN_TTL_HOURS must be positive.")
+
 PASSWORD_HASHERS = [
     "django.contrib.auth.hashers.Argon2PasswordHasher",
     "django.contrib.auth.hashers.PBKDF2PasswordHasher",
@@ -106,17 +140,47 @@ USE_TZ = True
 STATIC_URL = "/static/"
 MEDIA_URL = "/media/"
 MEDIA_ROOT = BASE_DIR / "media"
+ZSH_ATTACHMENT_ROOT = Path(
+    env("ZSH_ATTACHMENT_ROOT", str(Path.home() / ".local/share/zsh-leave/attachments")),
+).expanduser().resolve()
+ZSH_ATTACHMENT_SCANNER = env("ZSH_ATTACHMENT_SCANNER", "").strip()
+ZSH_ATTACHMENT_RETENTION_MONTHS = 2
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 REST_FRAMEWORK = {
+    "DEFAULT_THROTTLE_CLASSES": [
+        "leave.throttling.AnonymousClientThrottle",
+        "leave.throttling.AuthenticatedUserThrottle",
+        "leave.throttling.AuthenticatedClientThrottle",
+        "leave.throttling.ScopedClientThrottle",
+        "leave.throttling.ScopedUserThrottle",
+        "leave.throttling.LoginAccountThrottle",
+    ],
     "DEFAULT_AUTHENTICATION_CLASSES": [
         "leave.authentication_classes.SessionAuthentication",
     ],
     "DEFAULT_PERMISSION_CLASSES": [
         "rest_framework.permissions.IsAuthenticated",
     ],
-    "DEFAULT_THROTTLE_RATES": {"user": "120/min", "anon": "20/min", "auth_login": "5/min"},
+    "DEFAULT_THROTTLE_RATES": {
+        "user": "120/min",
+        "anon": "20/min",
+        "authenticated_client": "120/min",
+        "auth_login": "5/min",
+        "auth_login_account": "5/min",
+        "activation": "5/min",
+        "employee_invitation": "10/hour",
+        "password_operation": "5/hour",
+        "password_reset": "5/hour",
+        "employee_search": "60/min",
+        "bulk_import": "5/hour",
+        "expensive_operation": "10/min",
+        "file_upload": "10/hour",
+        "file_access": "30/min",
+    },
+    "EXCEPTION_HANDLER": "leave.throttling.rate_limit_exception_handler",
+    "NUM_PROXIES": 0,
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
 }
 

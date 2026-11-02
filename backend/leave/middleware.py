@@ -1,0 +1,73 @@
+from __future__ import annotations
+
+from contextlib import contextmanager
+import ipaddress
+import re
+from contextvars import ContextVar
+from uuid import uuid4
+
+from django.conf import settings
+
+
+_CORRELATION_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
+_audit_context: ContextVar[dict | None] = ContextVar("leave_audit_context", default=None)
+
+
+def current_audit_context() -> dict | None:
+    return _audit_context.get()
+
+
+@contextmanager
+def audit_context(*, correlation_id: str, source: str):
+    if not _CORRELATION_PATTERN.fullmatch(correlation_id):
+        raise ValueError("Invalid audit correlation ID")
+    token = _audit_context.set({
+        "correlation_id": correlation_id,
+        "source": source[:128],
+    })
+    try:
+        yield
+    finally:
+        _audit_context.reset(token)
+
+
+class AuditContextMiddleware:
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        supplied = request.headers.get("X-Correlation-ID", "")
+        correlation_id = supplied if _CORRELATION_PATTERN.fullmatch(supplied) else str(uuid4())
+        request.correlation_id = correlation_id
+        source = f"{request.method} {request.path_info}"[:128]
+        token = _audit_context.set({"correlation_id": correlation_id, "source": source})
+        try:
+            response = self.get_response(request)
+            response["X-Correlation-ID"] = correlation_id
+            return response
+        finally:
+            _audit_context.reset(token)
+
+
+class TrustedProxySSLHeaderMiddleware:
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        proxy_ssl_header = getattr(settings, "SECURE_PROXY_SSL_HEADER", None)
+        if proxy_ssl_header:
+            header_name, https_value = proxy_ssl_header
+            remote_addr = request.META.get("REMOTE_ADDR", "")
+            try:
+                remote_ip = ipaddress.ip_address(remote_addr)
+            except ValueError:
+                remote_ip = None
+
+            trusted_networks = getattr(settings, "ZSH_TRUSTED_PROXY_NETWORKS", ())
+            trusted_peer = remote_ip is not None and any(
+                remote_ip in network for network in trusted_networks
+            )
+            if not trusted_peer or request.META.get(header_name) != https_value:
+                request.META.pop(header_name, None)
+
+        return self.get_response(request)

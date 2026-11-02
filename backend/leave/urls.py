@@ -14,6 +14,12 @@ from .calendar_views import (
     work_patterns_history,
 )
 from .authentication import change_password, current_user, login, logout
+from .invitation_views import (
+    activate_account,
+    employee_invitation,
+    revoke_employee_invitation,
+    suspend_employee_account,
+)
 from .views import convert_calendar_date, health_check, readiness_check
 from .role_assignment_views import role_assignment_detail, role_assignments
 from .frontend_api_views import (
@@ -38,6 +44,7 @@ from .frontend_api_views import (
     request_attachment_download,
     request_attachments,
     settings_api,
+    sites,
 )
 from .workflow_views import (
     leave_request_action,
@@ -47,12 +54,14 @@ from .workflow_views import (
     leave_request_events,
     leave_requests,
 )
+from .export_views import exports
 
 urlpatterns = [
     path("auth/login", login, name="auth-login"),
     path("auth/logout", logout, name="auth-logout"),
     path("auth/me", current_user, name="auth-me"),
     path("auth/password", change_password, name="auth-password"),
+    path("auth/activate", activate_account, name="auth-activate"),
     path("admin/role-assignments/", role_assignments, name="role-assignments"),
     path("admin/role-assignments/<int:assignment_id>/", role_assignment_detail,
          name="role-assignment-detail"),
@@ -70,13 +79,22 @@ urlpatterns = [
     path("notifications/<int:notification_id>/read", notification_read, name="notification-read"),
     path("employees/", employees, name="employees"),
     path("employees/<int:employee_id>/", employees, name="employee-detail"),
+    path("employees/<int:employee_id>/invitation/", employee_invitation,
+         name="employee-invitation"),
+    path("employees/<int:employee_id>/invitation/revoke", revoke_employee_invitation,
+         name="employee-invitation-revoke"),
+    path("employees/<int:employee_id>/suspend", suspend_employee_account,
+         name="employee-account-suspend"),
     path("employees/<int:employee_id>/contract-periods/", contracts, name="employee-contracts"),
     path("companies/", companies, name="companies"),
     path("companies/<int:company_id>/", companies, name="company-detail"),
+    path("sites/", sites, name="sites"),
+    path("sites/<int:site_id>/", sites, name="site-detail"),
     path("departments/", departments, name="departments"),
     path("departments/<int:department_id>/", departments, name="department-detail"),
     path("coverage/", coverage, name="coverage"),
     path("reports/<str:kind>", reports, name="reports"),
+    path("exports/<str:dataset>.<str:file_format>", exports, name="exports"),
     path("admin/settings/", settings_api, name="admin-settings"),
     path("admin/jobs/", jobs, name="admin-jobs"),
     path("audit/events/", audit_events, name="audit-events"),
