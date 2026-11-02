@@ -14,7 +14,7 @@
 | `ZSH_ALLOWED_HOSTS` | فهرست comma-separated؛ production غیرخالی لازم |
 | `ZSH_DB_ENGINE`, `ZSH_DB_NAME`, `ZSH_DB_USER`, `ZSH_DB_PASSWORD`, `ZSH_DB_HOST`, `ZSH_DB_PORT` | اتصال settings_base |
 | `ZSH_CSRF_TRUSTED_ORIGINS` | فهرست originهای trusted |
-| `ZSH_TRUSTED_PROXY_IPS` | CIDRهای proxyهای trusted که مجاز به تعیین `X-Forwarded-For` هستند؛ پیش‌فرض خالی |
+| `ZSH_TRUSTED_PROXY_IPS` | CIDRهای peer مستقیم proxyهای تحت کنترل؛ فقط آن peerها برای `X-Forwarded-For` و `X-Forwarded-Proto` trusted هستند؛ پیش‌فرض خالی |
 | `ZSH_USE_SQLITE` | override خاص `settings_dev.py`; `1` SQLite |
 
 نمونه `.env.example` شامل مقدارهای صرفاً توسعه است و Django dotenv loader در مخزن دیده نشد. `settings_prod.py` PostgreSQL را اجباری می‌کند و password DB می‌خواهد. کلیدها را در مستند، Git یا log قرار ندهید.
@@ -40,9 +40,11 @@ DJANGO_SETTINGS_MODULE=config.settings_test python3 manage.py test
 
 `SessionAuthentication`, `CsrfViewMiddleware`, `HttpOnly`, `SameSite=Lax`, cookie secure در non-debug، throttleها، گذرواژه minimum 12 و Argon2 در settings هستند. پاسخ throttle برابر 429 و دارای `Retry-After` است. در production، شمارنده‌ها در جدول مشترک `zsh_cache` روی PostgreSQL قرار می‌گیرند؛ جدول را یک‌بار با `DJANGO_SETTINGS_MODULE=config.settings_prod python manage.py createcachetable zsh_cache` ایجاد کنید و اتصال یکسان تمام workerها را بررسی کنید. حافظه محلی process برای rate limiting چند-worker کافی نیست. backend واقعی deployment در این repository قابل تأیید نیست، پس تا بررسی آن ادعای محدودسازی سراسری نکنید.
 
-هدر `X-Forwarded-For` برای rate limit فقط از آدرس‌های داخل `ZSH_TRUSTED_PROXY_IPS` پذیرفته می‌شود. این CIDRها را به proxyهای تحت کنترل محدود کنید، در proxy هدر ورودی را حذف/بازنویسی یا chain را درست append کنید، و اتصال مستقیم عمومی به backend را ببندید. عملیات command/job که مستقیماً سرویس‌های Django را اجرا می‌کند از throttle HTTP عبور نمی‌کند. نرخ‌های حساس، scopeهای موجود و endpointهای password reset/export که هنوز وجود ندارند در [security.md](../security.md) ثبت شده‌اند.
+هدرهای `X-Forwarded-For` و `X-Forwarded-Proto` فقط از آدرس‌های داخل `ZSH_TRUSTED_PROXY_IPS` پذیرفته می‌شوند. این CIDRها را به peer مستقیم proxyهای تحت کنترل محدود کنید؛ proxy باید header ورودی کاربر را بازنویسی کند و اتصال مستقیم عمومی به backend باید در شبکه بسته باشد. عملیات command/job که مستقیماً سرویس‌های Django را اجرا می‌کند از throttle HTTP عبور نمی‌کند. نرخ‌های حساس، scopeهای موجود و endpointهای password reset/export که هنوز وجود ندارند در [security.md](../security.md) ثبت شده‌اند.
 
-`settings_prod.py` HTTPS redirect/HSTS را فعال می‌کند. TLS خود سرویس، سیاست TLS cipher، CSP، rate-limit در لبه و WAF در مخزن تعریف نشده‌اند؛ با استقرار واقعی آزمون شوند.
+`settings_prod.py` HTTPS redirect/HSTS و `SECURE_PROXY_SSL_HEADER` را فعال می‌کند؛ middleware فقط هدر دقیق `X-Forwarded-Proto: https` را از IP داخل `ZSH_TRUSTED_PROXY_IPS` می‌پذیرد و از دیگر peerها حذف می‌کند. برای TLS termination روی proxy، CIDR peer واقعی را تنظیم و overwrite هدر را در proxy تضمین کنید. با CIDR خالی، هیچ forwarded header مورد اعتماد نیست و upstream HTTP به HTTPS redirect می‌شود؛ در TLS مستقیم تا WSGI، scheme امن از سرور WSGI می‌آید. production فقط originهای CSRF دقیق HTTPS می‌پذیرد و `ALLOWED_HOSTS=*` رد می‌شود.
+
+توپولوژی وب production، TLS proxy، TLS خود سرویس، تنظیمات TLS cipher، CSP، rate-limit لبه و WAF در مخزن پیکربندی نشده‌اند. [راهنمای استقرار](../deployment.md) الگوی بی‌طرف از محصول، smoke test HTTPS/HTTP/health و تصمیم‌های لازم operator را توضیح می‌دهد. پیش از انتشار، دسترسی مستقیم upstream را در firewall/network ببندید و smoke test را در staging با گواهی و دامنه واقعی اجرا کنید.
 
 تنظیمات schema-backed در «تنظیمات سامانه» یا GET/POST `/api/v1/admin/settings/` موجودند؛ تغییر با دلیل audit می‌شود. هر تنظیم مقدار مجاز خودش را در `zsh_core/settings_schema.py` دارد. محرمانگی `privacy.*`, حداقل گروه، تنظیمات سیاست/گردش کار را خارج از تصمیم مالک محصول تغییر ندهید.
 

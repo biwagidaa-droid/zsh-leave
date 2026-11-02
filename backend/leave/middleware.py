@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+import ipaddress
 import re
 from contextvars import ContextVar
 from uuid import uuid4
+
+from django.conf import settings
 
 
 _CORRELATION_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
@@ -44,3 +47,27 @@ class AuditContextMiddleware:
             return response
         finally:
             _audit_context.reset(token)
+
+
+class TrustedProxySSLHeaderMiddleware:
+    def __init__(self, get_response):
+        self.get_response = get_response
+
+    def __call__(self, request):
+        proxy_ssl_header = getattr(settings, "SECURE_PROXY_SSL_HEADER", None)
+        if proxy_ssl_header:
+            header_name, https_value = proxy_ssl_header
+            remote_addr = request.META.get("REMOTE_ADDR", "")
+            try:
+                remote_ip = ipaddress.ip_address(remote_addr)
+            except ValueError:
+                remote_ip = None
+
+            trusted_networks = getattr(settings, "ZSH_TRUSTED_PROXY_NETWORKS", ())
+            trusted_peer = remote_ip is not None and any(
+                remote_ip in network for network in trusted_networks
+            )
+            if not trusted_peer or request.META.get(header_name) != https_value:
+                request.META.pop(header_name, None)
+
+        return self.get_response(request)

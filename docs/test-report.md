@@ -1,5 +1,12 @@
 # گزارش آزمون
 
+## بازبینی HTTPS و reverse proxy (۲ نوامبر ۲۰۲۶)
+
+- `DJANGO_SETTINGS_MODULE=config.settings_test python manage.py test tests.test_production_proxy_security --verbosity 1` — **۱۰ تست موفق**: HTTPS از proxy trusted، جعل هدر از peer untrusted، مقدار چندتایی forwarded proto، redirect HTTP، جلوگیری از loop، Host ناشناخته، HSTS، cookieهای Secure، CSRF origin مجاز/غیرمجاز و جداسازی تنظیمات test/dev از production.
+- `DJANGO_SETTINGS_MODULE=config.settings_test python manage.py test --verbosity 1` — **۳۴۵ تست، موفق؛ ۱۴ مورد skip**. هشدار موجود SQLite برای قید `nulls_distinct` باقی است و اثبات PostgreSQL محسوب نمی‌شود.
+- `DJANGO_SETTINGS_MODULE=config.settings_prod ... python manage.py check` با مقادیر environment آزمایشی — بدون مشکل؛ `check --deploy --tag security` نیز بدون هشدار امنیتی. مقادیر آزمایشی secret/DB برای بررسی settings بودند و credential محیط واقعی نیستند.
+- توپولوژی proxy واقعی، گواهی TLS، firewall/direct-upstream isolation و health probe از شبکهٔ واقعی در repository تعریف یا قابل اجرا نیستند؛ این موارد staging/production را لازم دارند. راهنمای امن و تصمیم‌های operator در `docs/deployment.md` ثبت شده‌اند.
+
 ## اعتبارسنجی PostgreSQL (۲ نوامبر ۲۰۲۶)
 
 - PostgreSQL 17.11 در سرویس Docker موقت؛ نسخهٔ Django 5.2.18 و psycopg 3.3.6.

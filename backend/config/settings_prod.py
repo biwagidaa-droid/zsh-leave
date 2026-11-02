@@ -1,3 +1,5 @@
+from urllib.parse import urlsplit
+
 from .settings_base import *  # noqa F401,F403
 
 DEBUG = False
@@ -13,6 +15,7 @@ if (
 SESSION_COOKIE_SECURE = True
 CSRF_COOKIE_SECURE = True
 SECURE_SSL_REDIRECT = True
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 SECURE_HSTS_SECONDS = 31536000
 SECURE_HSTS_INCLUDE_SUBDOMAINS = True
 SECURE_HSTS_PRELOAD = True
@@ -20,6 +23,29 @@ ALLOWED_HOSTS = [host.strip() for host in env("ZSH_ALLOWED_HOSTS", "").split(","
 
 if not ALLOWED_HOSTS:
     raise RuntimeError("ZSH_ALLOWED_HOSTS must be set in production.")
+
+if "*" in ALLOWED_HOSTS:
+    raise RuntimeError("Wildcard hosts are not allowed in production.")
+
+for origin in CSRF_TRUSTED_ORIGINS:
+    parsed_origin = urlsplit(origin)
+    if (
+        parsed_origin.scheme != "https"
+        or not parsed_origin.hostname
+        or "*" in parsed_origin.hostname
+        or parsed_origin.username is not None
+        or parsed_origin.password is not None
+        or parsed_origin.path
+        or parsed_origin.query
+        or parsed_origin.fragment
+    ):
+        raise RuntimeError(
+            "Production CSRF trusted origins must be exact HTTPS origins without paths."
+        )
+    try:
+        parsed_origin.port
+    except ValueError as exc:
+        raise RuntimeError("Production CSRF trusted origin has an invalid port.") from exc
 
 if len(SECRET_KEY) < 50:
     raise RuntimeError("ZSH_SECRET_KEY must contain at least 50 characters in production.")
