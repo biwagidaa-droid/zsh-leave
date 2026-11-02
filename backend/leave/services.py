@@ -28,6 +28,7 @@ from .models import (
     LeaveType,
     WorkflowIdempotency,
 )
+from .notification_services import queue_request_event_delivery
 
 
 class ServiceError(Exception):
@@ -42,8 +43,11 @@ def _origin(actor_role: str) -> str:
 
 
 def _log(req, user, role, event, from_s, to_s, reason="", *, before=None, after=None):
-    LeaveRequestEvent.objects.create(request=req, actor=user, origin=_origin(role), event=event,
-                                     from_status=from_s, to_status=to_s, reason=reason)
+    event_row = LeaveRequestEvent.objects.create(
+        request=req, actor=user, origin=_origin(role), event=event,
+        from_status=from_s, to_status=to_s, reason=reason,
+    )
+    queue_request_event_delivery(event_row)
     audit_services.record_audit(
         actor=user, origin=_origin(role), action=f"leave.{event}",
         entity="LeaveRequest", entity_id=req.pk,

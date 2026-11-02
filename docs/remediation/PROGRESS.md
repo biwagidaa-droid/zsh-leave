@@ -1,16 +1,31 @@
 # پیشرفت پروژه اصلاح
 
-## فاز فعلی
+## ممیزی نهایی مستقل — ۲ نوامبر ۲۰۲۶
+
+این نتیجه، وضعیت فعلی را بر گزارش‌های snapshot قدیمی این فایل مقدم می‌کند. آزمون کامل Backend روی SQLite **۳۷۸ passed، ۱۴ skipped** و روی PostgreSQL 17.11 **۳۷۸ passed، بدون skip** بود. Django check، migration drift، compileall و production security settings با ورودی ساختگی موفق شدند. Lifecycle اکنون با الزام اشتغال مؤثر و `ACCOUNT_ACTIVATED` در authorization مرکزی و session آزموده شده است؛ PostgreSQL نیز در محیط test واقعی اجرا شد.
+
+| Gate | وضعیت فعلی |
+|---|---|
+| Authorization/scope، confidentiality، lifecycle، activation، data integrity | PASS در مسیرها و آزمون‌های ثبت‌شده در [گزارش نهایی Backend](./BACKEND-FINAL-AUDIT.md) |
+| PostgreSQL | PASS برای PostgreSQL 17.11 test؛ نه production DB |
+| Audit append-only | NOT VERIFIED کلی: UPDATE/DELETE محافظت می‌شوند، اما TRUNCATE خام روی PostgreSQL حذف را ممکن کرد؛ محدودیت role production نامشخص است |
+| Jobs | NOT VERIFIED در deployment؛ one-shot scheduler و heartbeat روی staging مصنوعی موفق، systemd timer واقعی ناموجود |
+| Attachments | NOT VERIFIED در deployment؛ کد و hash restore تست شدند، volume/scanner production ناموجود |
+| Backup/restore | restore مصنوعی روی PostgreSQL 17.11 موفق؛ backup/offsite/restore production **NOT VERIFIED** |
+
+خروجی‌های مستقل: [امنیت](./SECURITY-VERIFICATION.md)، [شواهد PostgreSQL](./POSTGRESQL-EVIDENCE.md)، [عملیات Production](./PRODUCTION-OPERATIONS.md) و [شواهد آزمون](./TEST-EVIDENCE.md). وضعیت کل همچنان **NOT READY FOR PRODUCTION** است.
+
+## وضعیت فاز در snapshot تاریخی
 
 فاز ۳ — چرخه استخدام و offboarding: **BLOCKED / NOT VERIFIED**. بررسی مستقل نشان داد تغییر اولیه فقط مدل بود، بدون migration یا اتصال به مجوزها؛ آن تغییر ناقص حذف شد. هنوز سرویس مرکزی وضعیت استخدام، offboarding، rehire و regression test چرخه استخدام پیاده‌سازی نشده است. آخرین فازهای تکمیل‌شده: فاز ۰، فاز ۱، فاز ۲ و فاز مجوز کاتالوگ سراسری LeaveType.
 
-## تکمیل‌شده
+## تکمیل‌های ثبت‌شده در snapshot تاریخی
 
 - **فاز ۰ — Discovery/Baseline:** ساختار مخزن، branch/status، مستندات معماری/امنیت، فرمان‌های baseline و محدودیت PostgreSQL ثبت شد.
 - **فاز ۱ — Critical privacy (سطح‌های بررسی‌شده):** confidential balance/entitlements، گزارش‌های executive و `coverage.awayCount` مدیر با regression tests فیلتر شدند. Gate حریم خصوصی کلی همچنان NOT VERIFIED.
 - **فاز ۲ — HR absence:** endpoint به ایجاد مستقیم `APPROVED` تغییر کرد؛ approve دوم حذف شد؛ idempotency key الزامی و fingerprint کامل شد؛ تست event/audit، ledger، replay، scope و rollback افزوده شد.
 
-## فایل‌های تغییر‌یافته
+## فایل‌های تغییر‌یافته در snapshot تاریخی
 
 - `backend/leave/frontend_api_views.py`
 - `backend/leave/authorization.py`

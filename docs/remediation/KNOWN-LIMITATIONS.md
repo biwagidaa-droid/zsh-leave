@@ -1,5 +1,9 @@
 # محدودیت‌ها و تصمیم‌های باز
 
+## وضعیت مستقل فعلی — ۲ نوامبر ۲۰۲۶
+
+این بخش، موارد بررسی‌شده را از فهرست تاریخی پایین‌تر جدا می‌کند. PostgreSQL 17.11 اکنون با کل suite اجرا شد (۳۷۷ passed، صفر skipped)، employment authorization، activation، notification delivery و backup/restore synthetic در کد/آزمون حاضرند. محدودیت‌های باز فعلی عبارت‌اند از: PostgreSQL `TRUNCATE` می‌تواند `AuditEvent` را پاک کند؛ production role grants، volume/scanner، systemd deployment، monitoring، SMTP واقعی، offsite backup و restore production موجود/آزموده نیستند؛ Bradford همچنان `provisional` است؛ push/SMS و provider bounce webhook نداریم. جزئیات و شواهد: [ممیزی نهایی](./BACKEND-FINAL-AUDIT.md)، [PostgreSQL](./POSTGRESQL-EVIDENCE.md)، [عملیات](./PRODUCTION-OPERATIONS.md).
+
 این فهرست وضعیت را از کد/مستندات مشاهده‌شده جدا می‌کند؛ موارد «بررسی‌نشده» به معنی پیاده‌سازی سالم یا معیوب نیستند.
 
 ## یافته‌های قطعی

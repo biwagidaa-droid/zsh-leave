@@ -1,5 +1,9 @@
 # دروازه آمادگی تولید
 
+## نتیجه ممیزی مستقل — ۲ نوامبر ۲۰۲۶
+
+جدول قبلی پایین‌تر وضعیت snapshot زمان فازهای قبلی است و از نظر PostgreSQL، lifecycle، notification و backup به‌روز نیست. نتایج فعلی در [ممیزی نهایی Backend](./BACKEND-FINAL-AUDIT.md) و گزارش‌های امنیت، PostgreSQL و عملیات آمده‌اند. وضعیت gateها اکنون: A Authorization **PASS** برای مسیرهای آزموده‌شده؛ B Confidentiality **PASS** برای endpoint/exportهای دارای regression؛ C Workflow **PASS**؛ D Employment lifecycle **PASS** با session denial در درخواست بعدی؛ E Activation **PASS**؛ F Data integrity **PASS**؛ G PostgreSQL **PASS** روی PostgreSQL 17.11 آزمایشی؛ H Frontend خارج از scope؛ I Jobs **NOT VERIFIED در deployment**؛ J Deployment/operations **NOT VERIFIED**؛ Audit **NOT VERIFIED کلی** به علت TRUNCATE/role grants؛ Attachments **NOT VERIFIED در محیط production**. نتیجهٔ کلی همچنان **NOT READY FOR PRODUCTION** است.
+
 هیچ gate کلی با این تغییرات PASS اعلام نمی‌شود. نتیجه هر مورد براساس شواهد همین فازها است.
 
 | Gate | وضعیت | شاهد/مانع |

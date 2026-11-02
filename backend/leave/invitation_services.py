@@ -3,7 +3,6 @@ from __future__ import annotations
 import hashlib
 import re
 import secrets
-import smtplib
 from dataclasses import dataclass
 from datetime import timedelta
 from urllib.parse import quote
@@ -11,7 +10,6 @@ from urllib.parse import quote
 from django.conf import settings
 from django.contrib.auth import password_validation
 from django.core.exceptions import ValidationError
-from django.core.mail import BadHeaderError, send_mail
 from django.core.validators import validate_email
 from django.db import transaction
 from django.utils import timezone
@@ -19,6 +17,13 @@ from django.utils import timezone
 from . import audit_services
 from .employment_services import is_employed_on, organization_localdate
 from .models import EmployeeInvitation, EmployeeProfile
+from .notification_services import (
+    EmailProviderError,
+    EmailProviderUnavailable,
+    email_provider_configured,
+    queue_activation_confirmation,
+    send_email,
+)
 
 TOKEN_PATTERN = re.compile(r"^[A-Za-z0-9_-]{43}$")
 ACTIVE_INVITATION_STATUSES = (
@@ -117,20 +122,6 @@ def _development_url(token: str) -> str | None:
     return f"{base_url}/activate-account#token={quote(token, safe='')}"
 
 
-def _delivery_configured() -> bool:
-    backend = getattr(settings, "EMAIL_BACKEND", "")
-    smtp_host_ready = (
-        not backend.endswith("smtp.EmailBackend")
-        or bool(getattr(settings, "EMAIL_HOST", ""))
-    )
-    return bool(
-        getattr(settings, "ZSH_EMAIL_ENABLED", False)
-        and getattr(settings, "DEFAULT_FROM_EMAIL", "")
-        and getattr(settings, "ZSH_PUBLIC_BASE_URL", "")
-        and smtp_host_ready
-    )
-
-
 def invite_employee(*, employee_id: int, actor, email: str | None = None) -> InvitationResult:
     raw_token = secrets.token_urlsafe(32)
     token_hash = hashlib.sha256(raw_token.encode("ascii")).hexdigest()
@@ -177,7 +168,7 @@ def invite_employee(*, employee_id: int, actor, email: str | None = None) -> Inv
             actor=actor,
         )
 
-        if not _delivery_configured():
+        if not email_provider_configured() or not settings.ZSH_PUBLIC_BASE_URL:
             _audit(
                 action="invitation.delivery_failed",
                 employee_id=employee.pk,
@@ -190,18 +181,17 @@ def invite_employee(*, employee_id: int, actor, email: str | None = None) -> Inv
         public_base_url = settings.ZSH_PUBLIC_BASE_URL.rstrip("/")
         activation_link = f"{public_base_url}/activate-account#token={quote(raw_token, safe='')}"
         try:
-            sent_count = send_mail(
+            send_email(
                 subject="فعال‌سازی حساب کاربری",
-                message=(
+                body=(
                     "برای تنظیم رمز عبور و فعال‌سازی حساب، پیوند زیر را باز کنید. "
                     "این پیوند یک‌بارمصرف است و پس از انقضا قابل استفاده نیست:\n"
                     f"{activation_link}"
                 ),
-                from_email=settings.DEFAULT_FROM_EMAIL,
-                recipient_list=[target_email],
-                fail_silently=False,
+                recipient=target_email,
             )
-        except (BadHeaderError, OSError, smtplib.SMTPException):
+            sent_count = 1
+        except (EmailProviderError, EmailProviderUnavailable):
             sent_count = 0
 
         if sent_count != 1:
@@ -362,6 +352,7 @@ def activate_invitation(*, raw_token, email, password) -> str | None:
                         employee.email_verified_at = now
                         employee.save(update_fields=["account_status", "email_verified_at"])
                         _audit(action="activation.succeeded", employee_id=employee.pk, actor=user)
+                        queue_activation_confirmation(invitation)
                         _audit(action="password.setup.completed", employee_id=employee.pk, actor=user)
 
         if error_code is not None:

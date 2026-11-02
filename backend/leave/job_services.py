@@ -12,6 +12,7 @@ from uuid import uuid4
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import connection, IntegrityError, InterfaceError, OperationalError, transaction
+from django.db.models import Q
 from django.utils import timezone
 
 from zsh_core import settings_schema, workflow as wf
@@ -34,10 +35,12 @@ from .models import (
     LeaveEntitlement,
     LeaveRequest,
     LeaveRequestEvent,
+    NotificationDelivery,
     SchedulerHeartbeat,
     SystemSetting,
 )
 from .services import escalate_overdue
+from .notification_services import deliver_pending_notifications, queue_request_event_delivery
 
 logger = logging.getLogger(__name__)
 
@@ -88,7 +91,7 @@ def record_scheduler_heartbeat(now: dt.datetime | None = None) -> None:
 
 def _schedule_for(job_name: str, now: dt.datetime) -> dt.datetime | None:
     local_now = timezone.localtime(now, timezone.get_default_timezone())
-    if job_name in {"overdue_escalation", "manager_reminders"}:
+    if job_name in {"overdue_escalation", "manager_reminders", "notification_delivery"}:
         minute = local_now.minute - local_now.minute % 5
         local_schedule = _scheduled_local_datetime(
             local_now.date(), dt.time(local_now.hour, minute),
@@ -170,6 +173,7 @@ def _run_threshold_job(job_name: str, setting_key: str, event_name: str | None =
                     from_status=current_request.status,
                     to_status=current_request.status,
                 )
+                queue_request_event_delivery(event)
                 audit_services.record_audit(
                     actor=None,
                     origin=wf.SYSTEM,
@@ -280,6 +284,10 @@ def _run_manager_reminders() -> JobResult:
     )
 
 
+def _run_notification_delivery() -> JobResult:
+    return JobResult(deliver_pending_notifications())
+
+
 def _run_carry_forward() -> JobResult:
     return _run_entitlement_rollover(expire=False)
 
@@ -291,6 +299,7 @@ def _run_expiration() -> JobResult:
 JOB_HANDLERS = {
     "overdue_escalation": _run_overdue_escalations,
     "manager_reminders": _run_manager_reminders,
+    "notification_delivery": _run_notification_delivery,
     "entitlement_expiration": _run_expiration,
     "carry_forward": _run_carry_forward,
 }
@@ -303,6 +312,10 @@ JOB_METADATA = {
     "manager_reminders": {
         "schedule": "هر ۵ دقیقه؛ پس از رسیدن به آستانه روز کاری",
         "purpose": "ثبت یک اعلان درون‌برنامه‌ای برای مدیر درخواست معوق",
+    },
+    "notification_delivery": {
+        "schedule": "هر ۵ دقیقه، در صورت وجود اعلان ایمیل صف‌شده",
+        "purpose": "ارسال ایمیل‌های صف‌شده با تلاش مجدد محدود",
     },
     "carry_forward": {
         "schedule": "روزانه ساعت ۰۰:۱۵",
@@ -490,6 +503,16 @@ def run_due_jobs(now: dt.datetime | None = None) -> list[JobExecution]:
     enabled = {
         "overdue_escalation": options["workflow.escalate_after_working_days"] is not None,
         "manager_reminders": options["workflow.reminder_after_working_days"] is not None,
+        "notification_delivery": NotificationDelivery.objects.filter(
+            Q(status__in=[
+                NotificationDelivery.STATUS_QUEUED,
+                NotificationDelivery.STATUS_SENDING,
+            ])
+            | Q(
+                status=NotificationDelivery.STATUS_UNAVAILABLE,
+                last_error_code="EmailProviderNotConfigured",
+            ),
+        ).exists(),
         "entitlement_expiration": options["jobs.expire_carry_over"],
         "carry_forward": (
             options["jobs.carry_forward_policy"] != "none"
@@ -528,7 +551,7 @@ def run_due_jobs(now: dt.datetime | None = None) -> list[JobExecution]:
             continue
         scheduled_for = _schedule_for(job_name, now)
         if scheduled_for is None or scheduled_for in pending_times or any(
-            item.scheduled_for == scheduled_for for item in results
+            item.job_name == job_name and item.scheduled_for == scheduled_for for item in results
         ):
             continue
         results.append(execute_job(job_name, scheduled_for, now=now))
@@ -559,6 +582,19 @@ def job_status_payload(now: dt.datetime | None = None) -> dict:
             "manager_reminders": (
                 options["workflow.reminder_after_working_days"] is not None,
                 "threshold_not_configured",
+            ),
+            "notification_delivery": (
+                NotificationDelivery.objects.filter(
+                    Q(status__in=[
+                        NotificationDelivery.STATUS_QUEUED,
+                        NotificationDelivery.STATUS_SENDING,
+                    ])
+                    | Q(
+                        status=NotificationDelivery.STATUS_UNAVAILABLE,
+                        last_error_code="EmailProviderNotConfigured",
+                    ),
+                ).exists(),
+                "no_pending_deliveries",
             ),
             "carry_forward": (
                 options["jobs.carry_forward_policy"] != "none"

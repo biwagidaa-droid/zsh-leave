@@ -5,6 +5,7 @@ from typing import Any
 
 from django.db.models import Q, QuerySet
 
+from .employment_services import is_employed_on
 from .models import EmployeeProfile, LeaveRequest, RoleAssignment
 
 EMPLOYEE = "employee"
@@ -69,6 +70,11 @@ def authorization_context(user: Any) -> AuthorizationContext:
     employee = EmployeeProfile.objects.select_related(
         "company", "site", "department",
     ).filter(user_id=user.pk, is_employee=True).first()
+    if employee is not None and (
+        not is_employed_on(employee)
+        or employee.account_status != EmployeeProfile.ACCOUNT_ACTIVATED
+    ):
+        return AuthorizationContext(user, None, frozenset(), ())
     if employee:
         roles.add(EMPLOYEE)
         if EmployeeProfile.objects.filter(

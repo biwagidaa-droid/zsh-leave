@@ -5,6 +5,10 @@ from .settings_base import *  # noqa F401,F403
 DEBUG = True
 ALLOWED_HOSTS = [host.strip() for host in os.environ.get("ZSH_ALLOWED_HOSTS", "localhost,127.0.0.1,testserver").split(",") if host.strip()]
 CORS_ALLOW_ALL_ORIGINS = True
+EMAIL_BACKEND = os.environ.get(
+    "ZSH_EMAIL_BACKEND",
+    "django.core.mail.backends.locmem.EmailBackend",
+)
 
 if os.environ.get("ZSH_USE_SQLITE") == "1":
     DATABASES = {

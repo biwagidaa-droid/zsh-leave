@@ -228,7 +228,14 @@ class CalendarApiTests(TestCase):
         self.assertIn(response.status_code, (401, 403))
 
     def test_workday_estimate_requires_employment_for_the_requested_period(self):
-        self.client.force_authenticate(user=self.user)
+        hr_user = get_user_model().objects.create_user(username="calendar-period-hr")
+        RoleAssignment.objects.create(
+            user=hr_user,
+            role=RoleAssignment.ROLE_HR,
+            scope=RoleAssignment.SCOPE_COMPANY,
+            company=self.company_a,
+        )
+        self.client.force_authenticate(user=hr_user)
         today = organization_localdate()
         tomorrow = today + dt.timedelta(days=1)
         self.employee.start_date = tomorrow
@@ -236,7 +243,11 @@ class CalendarApiTests(TestCase):
 
         future_hire = self.client.get(
             "/api/v1/working-days/estimate",
-            {"start": today.isoformat(), "end": today.isoformat()},
+            {
+                "employee": self.employee.pk,
+                "start": today.isoformat(),
+                "end": today.isoformat(),
+            },
         )
         self.assertEqual(future_hire.status_code, 422)
         self.assertEqual(future_hire.json()["code"], "employee_not_employed")
@@ -246,7 +257,11 @@ class CalendarApiTests(TestCase):
         self.employee.save(update_fields=["start_date", "end_date"])
         former_employee = self.client.get(
             "/api/v1/working-days/estimate",
-            {"start": today.isoformat(), "end": today.isoformat()},
+            {
+                "employee": self.employee.pk,
+                "start": today.isoformat(),
+                "end": today.isoformat(),
+            },
         )
         self.assertEqual(former_employee.status_code, 422)
         self.assertEqual(former_employee.json()["code"], "employee_not_employed")
@@ -255,7 +270,11 @@ class CalendarApiTests(TestCase):
         self.employee.save(update_fields=["end_date"])
         employed = self.client.get(
             "/api/v1/working-days/estimate",
-            {"start": today.isoformat(), "end": today.isoformat()},
+            {
+                "employee": self.employee.pk,
+                "start": today.isoformat(),
+                "end": today.isoformat(),
+            },
         )
         self.assertEqual(employed.status_code, 409)
         self.assertEqual(employed.json()["code"], "calendar_not_configured")

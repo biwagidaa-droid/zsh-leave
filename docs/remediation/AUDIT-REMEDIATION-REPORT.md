@@ -1,5 +1,9 @@
 # Audit remediation report
 
+## Independent audit status (2026-11-02)
+
+This report records an earlier remediation snapshot. Current evidence supersedes its PostgreSQL/production limitations: the complete backend suite passed against PostgreSQL 17.11, but production DB roles and deployment remain unverified. A new audit found row-level append-only UPDATE/DELETE guards do not block `TRUNCATE`; see [PostgreSQL evidence](./POSTGRESQL-EVIDENCE.md) and [final backend audit](./BACKEND-FINAL-AUDIT.md). Do not interpret the earlier “not verified” statements as current test-environment evidence or as proof of production readiness.
+
 ## Outcome
 
 The backend now uses one centralized audit writer for production `AuditEvent`

@@ -44,15 +44,12 @@ curl -sSI https://leave.example.test/api/v1/health/ -H 'Host: attacker.example'
 ## نصب
 این مخزن فرمان نصب وب/DB را ارائه نمی‌کند. پیش از تعریف deployment، مسئول عملیات باید image/runtime، WSGI server، proxy/TLS، روش secret injection، شبکهٔ خصوصی upstream، volume فایل‌ها، migration و rollback را انتخاب کند. `.env.example` یا دستورهای فرضی Compose در این مخزن مبنای اجرای production نیستند.
 
-پس از انتخاب runtime، پیکربندی SMTP برای ارسال دعوت کارکنان در production لازم است؛ راهنمای متغیرها در [چرخه عمر حساب کارمند](./account-lifecycle-fa.md) است. جدول cache مشترک باید با `DJANGO_SETTINGS_MODULE=config.settings_prod python manage.py createcachetable zsh_cache` ایجاد شود.
+پس از انتخاب runtime، پیکربندی امن email backend برای دعوت و اعلان‌های صف‌شده لازم است؛ متغیرها و وضعیت‌ها در [چرخه عمر حساب کارمند](./account-lifecycle-fa.md) و [سیاست اعلان‌ها](./notifications-fa.md) آمده‌اند. جدول cache مشترک باید با `DJANGO_SETTINGS_MODULE=config.settings_prod python manage.py createcachetable zsh_cache` ایجاد شود.
 
 برای اجرای کارهای زمان‌بندی‌شده، unit و timer systemd و شرط‌های readiness در [راهنمای عملیات پس‌زمینه](./background-jobs-fa.md) را دقیقاً نصب و فعال کنید. بدون این پیکربندی، Jobs API زمان‌بند را پیکربندی‌نشده اعلام می‌کند و readiness production موفق نمی‌شود.
 
-## پشتیبان‌گیری
-`pg_dump -Fc` شبانه + backup سازگار از `ZSH_ATTACHMENT_ROOT`؛ رمزگذاری با کلید جدا؛ نگهداری چرخشی. metadata و فایل باید با هم backup و restore شوند. مسیر خصوصی فایل و سیاست زمان‌بندی/تأیید حذف در [سیاست پیوست‌ها](./attachment-security-fa.md) مستند است.
-
-## بازیابی (باید در محیط جدا آزمون شود)
-ایجاد DB خالی → `pg_restore` → بازگردانی volume فایل‌ها → `migrate --check` → Health → مقایسه شمارش رکوردها و مجموع مانده با قبل از پشتیبان. گزارش آزمون در `docs/test-report.md`.
+## پشتیبان‌گیری و بازیابی
+اسکریپت fail-closed، inventory و runbook فارسی در [راهنمای پشتیبان‌گیری و بازیابی](./backup-restore-fa.md) آمده است. این repository فاقد backup destination/offsite، scheduler/alert و PostgreSQL production است؛ فقط یک drill مصنوعی روی دو container موقت PostgreSQL انجام شد. backup production **NOT VERIFIED** و restore drill روی زیرساخت production **NOT RUN** محسوب می‌شوند. تا restore drill محیط واقعی موفق، هیچ backup production را معتبر اعلام نکنید.
 
 ## پیش‌نیازهای شبکه داخلی
 گواهی TLS داخلی، SMTP داخلی (OQ-13)، دسترسی ذخیره‌سازی/پشتیبان، DNS، فهرست کاربران اولیه و ساختار سازمانی (OQ-11)، مالک سیاست مرخصی در HR.

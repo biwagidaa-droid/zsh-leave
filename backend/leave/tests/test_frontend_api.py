@@ -734,6 +734,41 @@ class FrontendApiTests(TestCase):
         self.assertEqual(self.client.get("/api/v1/hr/bradford-notes/").json()[0]["body"],
                          "Reviewed with employee")
 
+    def test_confidential_notification_is_hidden_from_manager_but_visible_to_employee_and_hr(self):
+        manager_user = get_user_model().objects.create_user(username="confidential-manager")
+        manager = EmployeeProfile.objects.create(
+            user=manager_user, company=self.company, department=self.department,
+            personnel_code="M-CONF", start_date=dt.date(2020, 1, 1),
+        )
+        self.employee.manager = manager
+        self.employee.save(update_fields=["manager"])
+        other_hr = get_user_model().objects.create_user(username="confidential-hr")
+        RoleAssignment.objects.create(
+            user=other_hr, role=RoleAssignment.ROLE_HR,
+            scope=RoleAssignment.SCOPE_COMPANY, company=self.company,
+        )
+        request = LeaveRequest.objects.create(
+            employee=self.employee, manager_snapshot=manager,
+            leave_type=self.confidential_type,
+            start_date=dt.date(2026, 11, 2), end_date=dt.date(2026, 11, 2),
+            working_days=Decimal("1"), status="PENDING",
+        )
+        event = LeaveRequestEvent.objects.create(
+            request=request, actor=self.hr_user, origin="hr",
+            event="submit", to_status="PENDING",
+        )
+
+        self.client.force_authenticate(manager_user)
+        self.assertEqual(self.client.get("/api/v1/notifications/").json(), [])
+        self.client.force_authenticate(self.employee_user)
+        self.assertEqual(
+            self.client.get("/api/v1/notifications/").json()[0]["id"], event.pk,
+        )
+        self.client.force_authenticate(other_hr)
+        self.assertEqual(
+            self.client.get("/api/v1/notifications/").json()[0]["id"], event.pk,
+        )
+
     def test_company_scope_rejects_foreign_hr_targets_without_side_effects(self):
         other_company = Company.objects.create(code="SCOPE-B", name="Scope company B")
         other_user = get_user_model().objects.create_user(username="scope-company-b")
@@ -1001,6 +1036,6 @@ class FrontendApiTests(TestCase):
             {job["name"] for job in jobs_response.json()["jobs"]},
             {
                 "overdue_escalation", "manager_reminders",
-                "carry_forward", "entitlement_expiration",
+                "carry_forward", "entitlement_expiration", "notification_delivery",
             },
         )

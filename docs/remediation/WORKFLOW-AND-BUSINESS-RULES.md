@@ -1,5 +1,9 @@
 # گردش‌کار و قواعد کسب‌وکار — شواهد فازهای ۱ و ۲
 
+## وضعیت مستقل فعلی — ۲ نوامبر ۲۰۲۶
+
+بخش چرخه استخدام پایین‌تر snapshot قبل از P18 است. `authorization_context()` اکنون `is_employed_on()` را برای پروفایل کارمند اعمال می‌کند؛ direct-service approval توسط manager منقضی رد می‌شود و session موجود پس از end date در درخواست بعدی 401 می‌گیرد و offboard می‌شود. Regressionهای این رفتار در `test_authorized_services.py` و `test_invitations.py` روی full suite اجرا شدند. ابطال proactive نشست‌ها وجود ندارد؛ جزئیات در [گزارش نهایی Backend](./BACKEND-FINAL-AUDIT.md).
+
 ## وضعیت‌های دیده‌شده در کد
 
 مدل درخواست مقادیر `PENDING`، `ESCALATED`، `APPROVED`، `REJECTED`، `CANCELLED` و `WITHDRAWAL_PENDING` را می‌پذیرد. قواعد جزئی transition در `zsh_core/workflow.py` قرار دارند؛ این گزارش جای بازبینی کامل همه مسیرهای اصلاح/لغو/بازگشایی نیست.

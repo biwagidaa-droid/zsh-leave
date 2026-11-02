@@ -1,5 +1,9 @@
 # امنیت و مجوزها — وضعیت فعلی ممیزی
 
+## تکمیل ممیزی مستقل — ۲ نوامبر ۲۰۲۶
+
+ماتریس پایین‌تر محدود به فازهای اولیه است. Audit نهایی، HR scope union، global LeaveType، IDOR، lifecycle، activation، exports، notification confidentiality و PostgreSQL row triggers را دوباره با suite کامل بررسی کرد. Employment authorization اکنون در `authorization_context` نیز کنترل می‌شود. PostgreSQL `TRUNCATE` همچنان bypass تأییدشده است و Gate 6 **NOT VERIFIED** باقی می‌ماند؛ جزئیات در [SECURITY-VERIFICATION.md](./SECURITY-VERIFICATION.md) است.
+
 ## اصل اجرای مجوز
 
 Backend مرجع مجوز است. `authorization_context` نقش‌ها را از کاربر فعال، profile و `RoleAssignment` فعال می‌سازد؛ selectorهای `scoped_employees` و `scoped_hr_leave_requests` دامنه را در query اعمال می‌کنند. این سند وضعیت بررسی‌شده فازهای ۱ تا ۳ را ثبت می‌کند و ادعای ممیزی کامل همه APIها نیست.
