@@ -1,0 +1,74 @@
+# PostgreSQL Verification Evidence
+
+**Date:** 2026-11-02. All PostgreSQL instances described here were disposable local Docker containers; no production DB or credentials were used.
+
+## Environment and commands
+
+- Image: `postgres:17`; server reported `17.11 (Debian 17.11-1.pgdg13+2)`.
+- Python runner: `python:3.14-slim`; dependencies installed from `backend/requirements.txt` inside the disposable container.
+- Backend settings: `config.settings_postgres_test`; database credentials generated randomly and passed via environment variables.
+
+Full suite command executed against the isolated PostgreSQL service (environment variable values were ephemeral):
+
+```sh
+docker run --rm --network "$PG_TEST_NETWORK" \
+  -e ZSH_DB_NAME=audittest -e ZSH_TEST_DB_NAME=test_audittest \
+  -e ZSH_DB_USER=postgres -e ZSH_DB_PASSWORD="$PG_TEST_PASSWORD" \
+  -e ZSH_DB_HOST=pgtest -e ZSH_DB_PORT=5432 \
+  -v "$PWD/..:/workspace" -w /workspace python:3.14-slim sh -eu -c \
+  'pip install --no-cache-dir -q -r backend/requirements.txt; cd backend; \
+   DJANGO_SETTINGS_MODULE=config.settings_postgres_test \
+   python manage.py test --verbosity 0'
+```
+
+**Observed after final employment activation guard:** exit 0; `Ran 378 tests`; `OK`; **0 skipped, 0 failures**. An earlier run exposed one portability defect in `test_backup_restore_command.py` (hard-coded `sqlite` vendor); the assertion was corrected to compare with `connection.vendor`, not weakened, and the final complete PostgreSQL suite passed.
+
+SQLite comparison command used the same disposable Python image with `DJANGO_SETTINGS_MODULE=config.settings_test`: exit 0; **378 tests, 14 PostgreSQL-only skips, 0 failures**. SQLite is not used as PostgreSQL evidence.
+
+## Migration and schema facts
+
+A fresh PostgreSQL test DB was created by Django’s test runner and all migrations applied. Separately, `python manage.py migrate --noinput` on a fresh PostgreSQL 17 database applied **20 leave migrations**, `0001` through `0020_notificationdelivery`; no `0021` migration exists. `makemigrations --check --dry-run` returned exit 0 and `No changes detected`.
+
+Catalog query executed on the migrated database:
+
+```sql
+SELECT table_name || '.' || column_name || '=' || data_type || ' max=' || character_maximum_length
+FROM information_schema.columns
+WHERE table_name='leave_auditevent' AND column_name='entity_id';
+```
+
+Observed: `leave_auditevent.entity_id=character varying max=64`. This supports both numeric request IDs and nonnumeric export identifiers. The PostgreSQL test `test_scoped_audit_query_casts_numeric_subquery_to_text` observed the generated `::varchar` cast.
+
+Catalog inspection showed `leave_auditevent_append_only` and `leave_entitlement_event_immutable_trigger` as `BEFORE DELETE OR UPDATE ... FOR EACH ROW` triggers. The full PostgreSQL suite passed direct ORM/raw-SQL UPDATE/DELETE rejection, entitlement triggers/projection guard, `nulls_distinct=False`, timestamp-with-time-zone, and concurrency cases:
+
+- `test_postgresql_triggers_reject_direct_sql_mutations`
+- `test_projection_writes_without_ledger_entries_are_rejected`
+- `test_parallel_reservations_serialize_without_lost_ledger_entries`
+- `test_parallel_approval_replays_one_atomic_posting`
+- `test_concurrent_duplicate_imports_commit_at_most_once`
+- `test_concurrent_same_slot_executes_once`
+- `test_concurrent_manager_updates_cannot_create_a_cycle`
+- `test_hr_absence_is_directly_approved_and_idempotent`
+
+The full-suite command above is the exact command context for each test.
+
+## Confirmed append-only gap
+
+The migration triggers block row `UPDATE` and `DELETE`; they are not statement-level `TRUNCATE` guards. This was reproduced on a disposable migrated PostgreSQL database using separate committed statements:
+
+```sh
+docker exec "$PG_CONTAINER" psql -X -U postgres -d audittest -c \
+  "INSERT INTO public.leave_auditevent (origin, action, entity, entity_id, before, after, reason, result, correlation_id, source, created_at) VALUES ('audit', 'truncate_probe', 'AuditEvent', 'probe-1', NULL, NULL, '', 'ok', '', '', CURRENT_TIMESTAMP)"
+docker exec "$PG_CONTAINER" psql -X -U postgres -d audittest -c \
+  "TRUNCATE TABLE public.leave_auditevent"
+docker exec "$PG_CONTAINER" psql -X -U postgres -d audittest -Atc \
+  "SELECT count(*) FROM public.leave_auditevent"
+```
+
+Observed: insert succeeded; `TRUNCATE TABLE` succeeded; remaining row count was `0`. A `TransactionTestCase` was used while probing; `TestCase` had produced a false positive because PostgreSQL rejected `TRUNCATE` with pending transaction trigger events. A proposed statement trigger was not retained: it made Django PostgreSQL test database flush fail because flush uses `TRUNCATE`.
+
+**Status: PARTIALLY FIXED / Gate 6 NOT VERIFIED.** Deployment must ensure the application role does not own append-only tables and lacks `TRUNCATE`/DDL privileges; no production role grants were available to verify. Direct INSERT permissions also require least-privilege/owner review because the row triggers do not authenticate event provenance.
+
+## Rollback evidence
+
+`AuditCoverageTests.test_audit_failure_rolls_back_business_mutation` verifies an audit-write exception rolls back a Company mutation. `AppendOnlyIntegrityTests.test_rejected_mutation_rolls_back_without_poisoning_outer_transaction` verifies rejected SQL mutation does not poison an outer transaction. Entitlement/workflow/import tests verify ledger, request, audit and import rollback boundaries. These passed in both full suites.

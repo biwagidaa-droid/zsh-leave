@@ -1,5 +1,44 @@
 # شواهد آزمون
 
+## دستورات و نتایج نهایی (۲ نوامبر ۲۰۲۶)
+
+دستورات زیر روی checkout فعلی اجرا شدند. Python وابستگی‌ها را داخل disposable `python:3.14-slim` نصب کرد؛ PostgreSQL در container جداگانهٔ `postgres:17` بود. هیچ production service/credential استفاده نشد.
+
+```sh
+# Full SQLite application suite
+cd backend
+DJANGO_SETTINGS_MODULE=config.settings_test python manage.py test --verbosity 0
+# Final observed: 378 tests, OK, 14 skipped (PostgreSQL-only).
+
+# Full PostgreSQL 17.11 suite (same command with PostgreSQL test settings)
+DJANGO_SETTINGS_MODULE=config.settings_postgres_test python manage.py test --verbosity 0
+# Final observed: 378 tests, OK, 0 skipped.
+
+DJANGO_SETTINGS_MODULE=config.settings_test python manage.py check
+DJANGO_SETTINGS_MODULE=config.settings_test python manage.py makemigrations --check --dry-run
+python -m compileall -q config leave zsh_core
+```
+
+`check`: exit 0. `makemigrations`: exit 0, `No changes detected`. `compileall`: exit 0. Production `check --deploy --tag security` with dummy environment: exit 0, no system-check issues. SQLite reports `models.W047` for unsupported `nulls_distinct`; PostgreSQL enforces it.
+
+Static tools: no repository lint/type configuration exists. Generic `black --check` exited 1 (seven reviewed files would be reformatted); default Flake8 exited 1 (150 E501 and one unused import); Mypy exited 1 (four diagnostics: dynamic Django manager base and three optional-profile narrowing warnings). No broad formatting or test weakening was applied. Exact tool results and limitations are in `BACKEND-FINAL-AUDIT.md`.
+
+Exact static commands, from `backend/`:
+
+```sh
+black --check leave/authorization.py leave/employment_services.py \
+	leave/tests/test_authorized_services.py leave/tests/test_invitations.py \
+	leave/tests/test_calendar.py leave/tests/test_backup_restore_command.py \
+	leave/tests/test_append_only_integrity.py
+flake8 leave/authorization.py leave/employment_services.py \
+	leave/tests/test_authorized_services.py leave/tests/test_invitations.py \
+	leave/tests/test_calendar.py leave/tests/test_backup_restore_command.py \
+	leave/tests/test_append_only_integrity.py --statistics
+mypy --ignore-missing-imports leave/authorization.py leave/employment_services.py
+```
+
+The test counts below are historical snapshots and are superseded by this section.
+
 ## اجرا پس از اصلاحات
 
 محیط: Python 3.14.2 / Django 5.2.18، Node 24.22.2 / npm 11.19.1. Backend روی SQLite آزمون اجرا شد.

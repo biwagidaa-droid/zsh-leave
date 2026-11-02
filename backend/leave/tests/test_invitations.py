@@ -382,6 +382,34 @@ class EmployeeInvitationTests(TestCase):
         self.employee.save(update_fields=["start_date", "account_status"])
         self.assertFalse(account_access_allowed(self.user, on_date=today))
 
+    def test_existing_session_is_rejected_after_employment_end_date_passes(self):
+        self.user.is_active = True
+        self.user.set_password(VALID_PASSWORD)
+        self.user.save(update_fields=["password", "is_active"])
+        self.employee.account_status = EmployeeProfile.ACCOUNT_ACTIVATED
+        self.employee.start_date = organization_localdate() - timedelta(days=30)
+        self.employee.end_date = None
+        self.employee.save(update_fields=["account_status", "start_date", "end_date"])
+        client = APIClient()
+        login = client.post(
+            "/api/v1/auth/login",
+            {"username": self.user.username, "password": VALID_PASSWORD},
+            format="json",
+        )
+        self.assertEqual(login.status_code, 200, login.content)
+        self.assertEqual(client.get("/api/v1/auth/me").status_code, 200)
+
+        EmployeeProfile.objects.filter(pk=self.employee.pk).update(
+            end_date=organization_localdate() - timedelta(days=1),
+        )
+        expired_response = client.get("/api/v1/auth/me")
+
+        self.assertEqual(expired_response.status_code, 401)
+        self.user.refresh_from_db()
+        self.employee.refresh_from_db()
+        self.assertFalse(self.user.is_active)
+        self.assertEqual(self.employee.account_status, EmployeeProfile.ACCOUNT_OFFBOARDED)
+
     def test_development_link_is_never_returned_when_debug_is_disabled(self):
         with override_settings(
             DEBUG=False,

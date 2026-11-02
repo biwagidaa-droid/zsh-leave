@@ -107,6 +107,31 @@ class AuthorizedLeaveServiceTests(TestCase):
                 request_id=request.pk, user=self.next_manager_user, event="approve",
             )
 
+    def test_expired_manager_cannot_approve_direct_service_call(self):
+        request = self.make_request(manager=self.manager)
+        EmployeeProfile.objects.filter(pk=self.manager.pk).update(
+            end_date=dt.date(2021, 1, 1),
+        )
+
+        with self.assertRaises(LeaveRequest.DoesNotExist):
+            apply_event(
+                request_id=request.pk, user=self.manager_user, event="approve",
+            )
+
+        request.refresh_from_db()
+        self.assertEqual(request.status, wf.PENDING)
+
+    def test_unactivated_employee_profile_gets_no_direct_service_roles(self):
+        from leave.authorization import authorization_context
+
+        self.employee.account_status = EmployeeProfile.INVITATION_PENDING
+        self.employee.save(update_fields=["account_status"])
+
+        context = authorization_context(self.employee_user)
+
+        self.assertIsNone(context.employee)
+        self.assertEqual(context.roles, frozenset())
+
     def test_confidential_decisions_cannot_be_made_by_manager(self):
         request = self.make_request(manager=self.manager, confidential=True)
         with self.assertRaises(wf.PermissionDenied):

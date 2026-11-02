@@ -4,6 +4,7 @@ import tempfile
 from io import StringIO
 from pathlib import Path
 
+from django.db import connection
 from django.core.management import call_command, CommandError
 from django.test import TestCase, override_settings
 
@@ -21,7 +22,7 @@ class VerifyBackupCommandTests(TestCase):
                 call_command("verify_backup", stdout=output)
                 inventory = json.loads(output.getvalue())
 
-                self.assertEqual(inventory["database_vendor"], "sqlite")
+                self.assertEqual(inventory["database_vendor"], connection.vendor)
                 self.assertEqual(inventory["errors"], [])
                 self.assertIn("leave.auditevent", inventory["record_counts"])
                 self.assertEqual(inventory["attachments"]["file_count"], 1)

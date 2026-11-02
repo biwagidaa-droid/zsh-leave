@@ -126,3 +126,9 @@ curl --fail --silent --show-error https://<staging-host>/api/v1/ready/
 - `run_scheduled_jobs` heartbeat تازه ثبت کرد؛ Django test Client با middleware production هر دو endpoint سلامت و readiness را با status 200 پاسخ داد و DB/scheduler را `healthy` گزارش کرد. Gunicorn، proxy/TLS یا مسیر شبکهٔ واقعی آزموده نشد.
 
 این نتیجه تنها ثابت می‌کند snapshot مصنوعیِ ساخته‌شده با همین script در همین drill قابل restore بوده است. مقصد offsite، زمان‌بندی/retention production، هشدار، scratch واقعی، بار/حجم production و secret manager آزموده نشدند. به همین دلیل وضعیت backup production همچنان **NOT VERIFIED** است و هیچ snapshot واقعی را تا موفقیت drill مستقل همان محیط «معتبر/قابل بازیابی» تلقی نکنید.
+
+## بازاجرای مستقل ممیزی نهایی — ۲ نوامبر ۲۰۲۶
+
+Restore drill بالا برای audit نهایی از ابتدا تکرار شد: دو container مستقل PostgreSQL 17.11، مقصد خالی `zsh_restore_audit`، کلید age و credential تصادفی موقت، DB/media ساختگی، و release id `audit-restore-drill-2026-11-02`. Snapshot شامل migration head فعلی `leave.0020_notificationdelivery` بود (۲۰ migration leave در catalog). `zsh-leave-backup.sh` و سپس `zsh-leave-restore-staging.sh` اجرا شدند؛ checksum هر سه artifact، `migrate --check`، `manage.py check`، شمارش رکوردها، FK، تاریخچه، reconciliation و SHA-256 پیوست موفق شدند. پس از restore، `run_scheduled_jobs` اجرای `notification_delivery` را `succeeded` ثبت کرد؛ با provider عمداً خاموش، delivery در وضعیت `unavailable` ماند. Health و readiness هر دو HTTP 200 بودند و heartbeat تازه داشتند.
+
+این drill فقط قابلیت اسکریپت برای دادهٔ مصنوعی را تأیید می‌کند. Production/offsite schedule، identity/secret manager واقعی، RPO/RTO با حجم واقعی، systemd timer، proxy شبکه‌ای، scanner و backup production هنوز **NOT VERIFIED** هستند.

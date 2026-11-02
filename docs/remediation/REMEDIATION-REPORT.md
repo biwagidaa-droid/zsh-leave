@@ -1,5 +1,9 @@
 # گزارش اصلاحات
 
+## وضعیت فعلی ممیزی مستقل — ۲ نوامبر ۲۰۲۶
+
+این گزارش شامل snapshot فازهای گذشته است و ادعاهای «سایر فازها پیاده‌سازی نشده‌اند» وضعیت فعلی را نشان نمی‌دهند. Employment authorization، invitation/activation، hierarchy/sites، imports/ledger، Bradford، scheduler, audit triggers, attachment security, notification delivery و backup/restore اکنون در کد/آزمون هستند؛ شواهد کامل و status هر حوزه در [گزارش نهایی Backend](./BACKEND-FINAL-AUDIT.md) آمده است. محدودیت‌های deployment، audit `TRUNCATE`, Bradford provisional، scanner و backup production همچنان بازند.
+
 ## فاز ۱ — حریم خصوصی انواع محرمانه
 
 | یافته | ریشه | اقدام | آزمون | وضعیت |
