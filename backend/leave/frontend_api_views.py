@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import datetime as dt
+import logging
 from decimal import Decimal, InvalidOperation
 from uuid import uuid4
 
 from django.contrib.auth import get_user_model
 from django.core.exceptions import PermissionDenied, ValidationError
+from django.core.files.base import ContentFile
 from django.db import IntegrityError, transaction
 from django.db.models import CharField, Count, ProtectedError, Q
 from django.db.models.functions import Cast
@@ -19,6 +21,11 @@ from zsh_core.permissions import HR as POLICY_HR, Viewer, visible_balance_types
 from . import admin_services
 from . import audit_services
 from . import bradford_services
+from .attachment_security import (
+    AttachmentScannerUnavailable,
+    InvalidAttachment,
+    validate_attachment,
+)
 from .authorization import (
     MANAGE_GLOBAL_LEAVE_TYPES, authorization_context, has_permission, hr_operation_employees,
     scoped_employees, scoped_hr_employees, scoped_hr_leave_requests,
@@ -64,10 +71,12 @@ from .models import (
     OrganizationSite,
     RoleAssignment,
     SystemSetting,
+    attachment_upload_path,
 )
 from .throttling import rate_limited
 
 User = get_user_model()
+logger = logging.getLogger(__name__)
 
 
 def _failure(code: str, message: str, status: int, fields: dict | None = None) -> Response:
@@ -1337,11 +1346,16 @@ def contracts(request, employee_id: int):
 @rate_limited("file_upload")
 @api_view(["GET", "POST"])
 def request_attachments(request, request_id: int):
-    from .workflow_views import _comment_allowed, _visible_request
+    from .workflow_views import _comment_allowed, _hr_for, _visible_request
 
     context = _context(request)
-    row = _visible_request(request_id, context)
-    if not _comment_allowed(context, row):
+    try:
+        row = _visible_request(request_id, context)
+    except LeaveRequest.DoesNotExist as exc:
+        raise Http404 from exc
+    if (
+        context.employee_id != row.employee_id and not _hr_for(context, row)
+    ) or not _comment_allowed(context, row):
         return _failure("permission_denied", "دسترسی به پیوست این درخواست مجاز نیست", 403)
     if request.method == "GET":
         return Response([{
@@ -1349,43 +1363,61 @@ def request_attachments(request, request_id: int):
             "fileName": attachment.file_name,
             "sizeLabel": f"{max(1, round(attachment.file_size / 1024))} KB",
             "createdAt": attachment.created_at.isoformat(),
+            "scanStatus": attachment.scan_status,
             "downloadUrl": f"/api/v1/leave-requests/{request_id}/attachments/{attachment.pk}/",
-        } for attachment in row.attachments.all()])
+        } for attachment in row.attachments.filter(
+            deletion_status=LeaveRequestAttachment.DELETION_ACTIVE,
+        )])
 
     upload = request.FILES.get("file")
     if upload is None:
         return _failure("invalid_attachment", "فایل پیوست الزامی است", 400)
-    if upload.size == 0 or upload.size > 10 * 1024 * 1024:
-        return _failure("invalid_attachment", "حجم فایل باید بین ۱ بایت و ۱۰ مگابایت باشد", 400)
-    file_name = upload.name.replace("\\", "/").rsplit("/", 1)[-1].strip()
-    extension = file_name.rsplit(".", 1)[-1].lower() if "." in file_name else ""
-    accepted = {
-        "pdf": ("application/pdf", b"%PDF-"),
-        "png": ("image/png", b"\x89PNG\r\n\x1a\n"),
-        "jpg": ("image/jpeg", b"\xff\xd8\xff"),
-        "jpeg": ("image/jpeg", b"\xff\xd8\xff"),
-    }
-    if extension not in accepted or len(file_name) > 255:
-        return _failure("invalid_attachment", "فقط فایل PDF، PNG یا JPEG مجاز است", 400)
-    content_type, signature = accepted[extension]
-    if upload.content_type != content_type or upload.read(len(signature)) != signature:
-        return _failure("invalid_attachment", "نوع یا محتوای فایل با پسوند آن سازگار نیست", 400)
-    upload.seek(0)
-    with transaction.atomic():
-        attachment = LeaveRequestAttachment.objects.create(
-            request=row, file=upload, file_name=file_name, content_type=content_type,
-            file_size=upload.size, uploaded_by=request.user,
-        )
-        audit_services.record_model_change(
-            actor=request.user,
-            origin="hr" if context.has_role("hr") else "employee",
-            action="leave_request.attachment_added",
-            instance=attachment,
-        )
+    try:
+        validated = validate_attachment(upload)
+    except InvalidAttachment:
+        return _failure("invalid_attachment", "فایل معتبر یا مجاز نیست", 400)
+    except AttachmentScannerUnavailable:
+        logger.error("Configured attachment malware scanner is unavailable.")
+        return _failure("attachment_scanner_unavailable", "بررسی امنیتی فایل در دسترس نیست", 503)
+
+    attachment = LeaveRequestAttachment(
+        request=row,
+        file_name=validated.filename,
+        content_type=validated.content_type,
+        file_size=len(validated.content),
+        scan_status=validated.scan_status,
+        uploaded_by=request.user,
+    )
+    storage = attachment.file.storage
+    requested_storage_name = attachment_upload_path(attachment, validated.filename)
+    try:
+        stored_name = storage.save(requested_storage_name, ContentFile(validated.content))
+    except OSError:
+        logger.error("Private attachment storage write failed.")
+        return _failure("attachment_storage_unavailable", "ذخیره فایل در دسترس نیست", 503)
+
+    try:
+        with transaction.atomic():
+            attachment.file = stored_name
+            attachment.save(force_insert=True)
+            audit_services.record_model_change(
+                actor=request.user,
+                origin="hr" if context.has_role("hr") else "employee",
+                action="leave_request.attachment_added",
+                instance=attachment,
+            )
+    except Exception:
+        try:
+            storage.delete(stored_name)
+        except OSError:
+            logger.error("Failed to clean up an orphaned private attachment.")
+        raise
+
     return Response({
         "id": attachment.pk, "fileName": attachment.file_name,
         "sizeLabel": f"{max(1, round(attachment.file_size / 1024))} KB",
         "createdAt": attachment.created_at.isoformat(),
+        "scanStatus": attachment.scan_status,
         "downloadUrl": f"/api/v1/leave-requests/{request_id}/attachments/{attachment.pk}/",
     }, status=201)
 
@@ -1393,20 +1425,38 @@ def request_attachments(request, request_id: int):
 @rate_limited("file_access")
 @api_view(["GET"])
 def request_attachment_download(request, request_id: int, attachment_id: int):
-    from .workflow_views import _comment_allowed, _visible_request
+    from .workflow_views import _comment_allowed, _hr_for, _visible_request
 
     context = _context(request)
-    row = _visible_request(request_id, context)
-    if not _comment_allowed(context, row):
+    try:
+        row = _visible_request(request_id, context)
+    except LeaveRequest.DoesNotExist as exc:
+        raise Http404 from exc
+    if (
+        context.employee_id != row.employee_id and not _hr_for(context, row)
+    ) or not _comment_allowed(context, row):
         return _failure("permission_denied", "دسترسی به پیوست این درخواست مجاز نیست", 403)
-    attachment = row.attachments.filter(pk=attachment_id).first()
+    attachment = row.attachments.filter(
+        pk=attachment_id,
+        deletion_status=LeaveRequestAttachment.DELETION_ACTIVE,
+    ).first()
     if attachment is None:
         raise Http404
+    try:
+        if not attachment.file.storage.exists(attachment.file.name):
+            raise Http404
+        file_handle = attachment.file.open("rb")
+    except FileNotFoundError as exc:
+        raise Http404 from exc
+    except OSError:
+        logger.error("Private attachment storage read failed.")
+        return _failure("attachment_storage_unavailable", "خواندن فایل در دسترس نیست", 503)
     response = FileResponse(
-        attachment.file.open("rb"), as_attachment=True,
-        filename=attachment.file_name, content_type=attachment.content_type,
+        file_handle, as_attachment=True, filename=attachment.file_name,
+        content_type=attachment.content_type,
     )
     response["Cache-Control"] = "private, no-store"
+    response["Pragma"] = "no-cache"
     response["X-Content-Type-Options"] = "nosniff"
     return response
 

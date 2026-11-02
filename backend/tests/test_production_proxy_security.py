@@ -169,6 +169,7 @@ class ProductionSettingsValidationTests(TestCase):
             "ZSH_ALLOWED_HOSTS": "leave.example.test",
             "ZSH_DB_USER": "zsh_app",
             "ZSH_DB_PASSWORD": "safe-test-password",
+            "ZSH_ATTACHMENT_ROOT": "/tmp/zsh-attachment-validation",
             "ZSH_CSRF_TRUSTED_ORIGINS": "https://app.example.test",
             "ZSH_TRUSTED_PROXY_IPS": "10.42.0.0/16",
         }
@@ -218,11 +219,27 @@ class ProductionSettingsValidationTests(TestCase):
             "ZSH_ALLOWED_HOSTS": "*",
             "ZSH_DB_USER": "zsh_app",
             "ZSH_DB_PASSWORD": "safe-test-password",
+            "ZSH_ATTACHMENT_ROOT": "/tmp/zsh-attachment-validation",
         }
         settings_base = importlib.import_module("config.settings_base")
         with patch.dict(os.environ, environment, clear=True):
             importlib.reload(settings_base)
             with self.assertRaisesRegex(RuntimeError, "Wildcard hosts"):
+                importlib.reload(importlib.import_module("config.settings_prod"))
+        importlib.reload(settings_base)
+
+    def test_production_settings_reject_attachment_storage_inside_repository(self):
+        environment = {
+            "ZSH_SECRET_KEY": "x" * 50,
+            "ZSH_ALLOWED_HOSTS": "leave.example.test",
+            "ZSH_DB_USER": "zsh_app",
+            "ZSH_DB_PASSWORD": "safe-test-password",
+            "ZSH_ATTACHMENT_ROOT": str(settings.PROJECT_ROOT / "private-attachments"),
+        }
+        settings_base = importlib.import_module("config.settings_base")
+        with patch.dict(os.environ, environment, clear=True):
+            importlib.reload(settings_base)
+            with self.assertRaisesRegex(RuntimeError, "outside the application repository"):
                 importlib.reload(importlib.import_module("config.settings_prod"))
         importlib.reload(settings_base)
 

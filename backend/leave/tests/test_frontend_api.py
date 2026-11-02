@@ -33,6 +33,7 @@ from leave.models import (
     RoleAssignment,
     SystemSetting,
 )
+from leave.tests.attachment_helpers import valid_pdf
 
 
 class FrontendApiTests(TestCase):
@@ -953,10 +954,10 @@ class FrontendApiTests(TestCase):
             start_date=dt.date(2026, 11, 2), end_date=dt.date(2026, 11, 2),
             working_days=Decimal("1"), status="PENDING",
         )
-        with tempfile.TemporaryDirectory() as media_root:
-            with override_settings(MEDIA_ROOT=media_root):
+        with tempfile.TemporaryDirectory() as attachment_root:
+            with override_settings(ZSH_ATTACHMENT_ROOT=attachment_root):
                 upload = SimpleUploadedFile(
-                    "evidence.pdf", b"%PDF-1.7\nprivate test attachment",
+                    "evidence.pdf", valid_pdf(),
                     content_type="application/pdf",
                 )
                 response = self.client.post(
@@ -968,7 +969,7 @@ class FrontendApiTests(TestCase):
                 self.assertEqual(listing.status_code, 200)
                 download = self.client.get(listing.json()[0]["downloadUrl"])
                 self.assertEqual(download.status_code, 200)
-                self.assertEqual(b"".join(download.streaming_content), b"%PDF-1.7\nprivate test attachment")
+                self.assertEqual(b"".join(download.streaming_content), valid_pdf())
 
                 invalid = SimpleUploadedFile(
                     "bad.pdf", b"not a pdf", content_type="application/pdf",

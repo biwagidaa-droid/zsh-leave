@@ -1,5 +1,13 @@
 # گزارش آزمون
 
+## سخت‌سازی پیوست‌های HR (۲ نوامبر ۲۰۲۶)
+
+- `DJANGO_SETTINGS_MODULE=config.settings_test python manage.py test --verbosity 1` — **۳۵۹ تست موفق، ۱۴ مورد skip**. آزمون‌ها روی SQLite اجرا شدند؛ هشدار محدودیت SQLite برای `nulls_distinct` باقی است و نتیجه، سازگاری PostgreSQL را اثبات نمی‌کند. زنجیرهٔ migration تا `leave.0019_attachment_security` روی پایگاه تست خالی اعمال شد.
+- گروه متمرکز `leave.tests.test_attachment_security`، `FrontendApiTests.test_request_attachments_are_validated_and_downloaded_through_authorized_route` و `RateLimitingTests` — **۲۶ تست موفق**؛ شامل فایل مجاز/نامعتبر، حد اندازه، MIME/signature/parser، path traversal در ورودی خام validator، مجوز مالک/HR، cross-company، پاسخ دانلود، storage failure، cleanup پس از شکست DB، scanner unavailable/reject/accept، کپی/hash-check فایل legacy، legal hold و purge.
+- تست‌های تنظیمات production — **۵ تست** برای تنظیم storage خصوصی خارج از repository و رفتارهای قبلی؛ کل suite نهایی نیز موفق شد. `manage.py check` و `check --deploy --tag security` با مقادیر آزمایشی production — بدون مشکل.
+- `makemigrations --check --dry-run` — `No changes detected`; `git diff --check` — موفق.
+- provider واقعی malware scanner، filesystem/volume و permissionهای deployment، backup/restore هماهنگ DB و فایل، مهاجرت دادهٔ واقعی و آزمون production/PostgreSQL در این محیط تأیید نشده‌اند. تا پیکربندی provider، وضعیت فایل `unscanned` است. راهنمای عملیات و محدودیت‌ها در `docs/attachment-security-fa.md` آمده‌اند.
+
 ## بازبینی HTTPS و reverse proxy (۲ نوامبر ۲۰۲۶)
 
 - `DJANGO_SETTINGS_MODULE=config.settings_test python manage.py test tests.test_production_proxy_security --verbosity 1` — **۱۰ تست موفق**: HTTPS از proxy trusted، جعل هدر از peer untrusted، مقدار چندتایی forwarded proto، redirect HTTP، جلوگیری از loop، Host ناشناخته، HSTS، cookieهای Secure، CSRF origin مجاز/غیرمجاز و جداسازی تنظیمات test/dev از production.

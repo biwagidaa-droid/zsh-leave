@@ -251,6 +251,7 @@ class ProductionAuthenticationSettingsTests(TestCase):
             "ZSH_ALLOWED_HOSTS": "example.test",
             "ZSH_DB_USER": "zsh_app",
             "ZSH_DB_PASSWORD": "safe-test-password",
+            "ZSH_ATTACHMENT_ROOT": "/tmp/zsh-attachment-validation",
         }
         with patch.dict(os.environ, valid_environment, clear=True):
             settings_prod = importlib.import_module("config.settings_prod")

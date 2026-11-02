@@ -7,7 +7,7 @@
 | درخواست‌های دیگران | IDOR | scope در selectors؛ 404 برای خارج از scope؛ تست ماتریسی |
 | مانده/سهمیه | دوبار کسر، race | `select_for_update`، تراکنش، قیود DB، idempotency |
 | حساب‌ها | brute force، سرقت نشست | Argon2، Rate Limit، قفل موقت، کوکی Secure/HttpOnly/SameSite، انقضای نشست |
-| فایل‌ها | اجرای فایل، دانلود غیرمجاز | نام تصادفی، خارج از webroot، تشخیص نوع با محتوا، دانلود فقط از طریق API، `Content-Disposition: attachment`، `nosniff` |
+| فایل‌ها | اجرای فایل، دانلود غیرمجاز، فایل مخرب، دسترسی میان‌شرکتی | اعتبارسنج ساختاری PDF/PNG/JPEG، نام تصادفی، storage خصوصی با permission محدود، دانلود scopeشده از API، `attachment`، `nosniff` و no-store |
 | خروجی‌ها | CSV/Formula Injection | پیشوند `'` برای سلول‌های شروع با `= + - @ \t \r` در CSV و XLSX |
 | لاگ‌ها | متن آزاد حساس (SEC-003) | بدون ثبت دلیل/یادداشت پزشکی در لاگ؛ AuditEvent با فیلدهای redacted؛ دسترسی محدود |
 | زنجیره تأمین | وابستگی آسیب‌پذیر (SEC-006) | قفل نسخه، `pip-audit`، `npm audit`، اسکن Secret، SBOM در CI |
@@ -72,7 +72,7 @@ DRF نسخه 3.18.3 نصب‌شده در زمان بررسی، rateها را ب�
 
 Migration `0014` برای شش جدول append-only جدید، triggerهای `BEFORE UPDATE OR DELETE` در PostgreSQL و triggerهای متناظر در SQLite ایجاد می‌کند؛ محافظ `EntitlementEvent` در `0008` دست‌نخورده می‌ماند. هیچ ردیف موجودی در migration تغییر یا حذف نمی‌شود. محافظ DB رد کردن `QuerySet.update/delete`, `bulk_update` و SQL مستقیم را پوشش می‌دهد؛ `bulk_create` و درج عادی همچنان مجازند. تست‌ها تمام هفت جدول را از مسیر مدل، QuerySet، bulk update و SQL مستقیم بررسی می‌کنند. آزمون اختصاصی PostgreSQL در صورت اجرای suite روی PostgreSQL فعال است؛ اجرای SQLite به‌تنهایی مدرک اجرای PostgreSQL نیست.
 
-در repository هیچ فرایند retention یا legal erasure تأییدشده برای این تاریخچه‌ها پیدا نشد. برای legal hold/erasure باید فرایند مستقل، دارای مجوز، ثبت‌شده و بازبینی‌شده تعریف شود؛ این migration یا کد عادی برنامه bypass حذف/ویرایش ندارد. خاموش‌کردن trigger یا migration برگشت‌پذیر راهکار retention نیست.
+برای پیوست‌ها، سیاست فعلی دو ماه از بارگذاری است؛ حذف خودکار نیست و purge فقط با تأیید صریح، دلیل audit و رعایت legal hold انجام می‌شود. فایل‌ها خارج از مسیر public و با endpoint scopeشده سرو می‌شوند. scanner به‌صورت پیش‌فرض تنظیم نیست و API وضعیت `unscanned` را اعلام می‌کند. جزئیات rollout/retention در [سیاست امنیت و نگهداری پیوست](./attachment-security-fa.md) است. سایر تاریخچه‌های append-only retention جداگانه دارند.
 
 در production، `ZSH_DB_USER` دیگر به `postgres` پیش‌فرض نمی‌شود و باید صریح تنظیم شود. نقش runtime برنامه نباید مالک schema/table یا superuser باشد و نباید مجوز `CREATE`, `ALTER`, `DROP`, `TRIGGER`, `TRUNCATE` یا غیرفعال‌کردن triggerها داشته باشد. در صورت امکان برای هفت جدول append-only فقط `SELECT` و `INSERT` (به‌علاوه دسترسی لازم به sequence) بدهید و `UPDATE`, `DELETE`, `TRUNCATE`, `TRIGGER` را revoke کنید. اجرای migration باید با هویت جداگانه و محدود به فرایند deployment انجام شود؛ راستی‌آزمایی privilegeهای محیط واقعی هنوز لازم است.
 

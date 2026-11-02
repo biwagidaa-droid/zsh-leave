@@ -20,6 +20,7 @@ from leave.models import (
     LeaveType,
     RoleAssignment,
 )
+from leave.tests.attachment_helpers import valid_pdf
 from leave.throttling import ScopedClientThrottle, ScopedUserThrottle, trusted_client_ip
 
 User = get_user_model()
@@ -302,13 +303,13 @@ class RateLimitingTests(TestCase):
             working_days=Decimal("1"),
             status="PENDING",
         )
-        with tempfile.TemporaryDirectory() as media_root:
-            with override_settings(MEDIA_ROOT=media_root):
+        with tempfile.TemporaryDirectory() as attachment_root:
+            with override_settings(ZSH_ATTACHMENT_ROOT=attachment_root):
                 with patch.dict(SimpleRateThrottle.THROTTLE_RATES, {"file_upload": "2/min"}):
                     for _ in range(2):
                         upload = SimpleUploadedFile(
                             "evidence.pdf",
-                            b"%PDF-1.7\nrate limit test",
+                            valid_pdf(),
                             content_type="application/pdf",
                         )
                         self.assertEqual(
@@ -321,7 +322,7 @@ class RateLimitingTests(TestCase):
                         )
                     upload = SimpleUploadedFile(
                         "evidence.pdf",
-                        b"%PDF-1.7\nrate limit test",
+                        valid_pdf(),
                         content_type="application/pdf",
                     )
                     response = self.client.post(

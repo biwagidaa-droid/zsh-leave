@@ -1,4 +1,5 @@
 from urllib.parse import urlsplit
+from pathlib import Path
 
 from .settings_base import *  # noqa F401,F403
 
@@ -60,6 +61,17 @@ DATABASES = {
         "PORT": env("ZSH_DB_PORT", "5432"),
     }
 }
+
+attachment_root = env("ZSH_ATTACHMENT_ROOT", required=True)
+if not Path(attachment_root).is_absolute():
+    raise RuntimeError("ZSH_ATTACHMENT_ROOT must be an absolute private storage path.")
+ZSH_ATTACHMENT_ROOT = Path(attachment_root).expanduser().resolve()
+try:
+    ZSH_ATTACHMENT_ROOT.relative_to(PROJECT_ROOT)
+except ValueError:
+    pass
+else:
+    raise RuntimeError("ZSH_ATTACHMENT_ROOT must be outside the application repository.")
 
 CACHES = {
     "default": {

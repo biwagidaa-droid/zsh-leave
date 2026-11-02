@@ -50,11 +50,11 @@ DJANGO_SETTINGS_MODULE=config.settings_test python3 manage.py test
 
 ## مهاجرت، DB، فایل و بازیابی
 
-- مهاجرت‌های `backend/leave/migrations/0001_initial.py` تا `0011_request_attachments.py` منبع schema هستند.
+- مهاجرت‌های `backend/leave/migrations/0001_initial.py` به بعد منبع schema هستند؛ migration `0019_attachment_security` metadata امنیت/retention را اضافه و فایل‌های تاریخی را با تطبیق SHA-256 از `MEDIA_ROOT` به `ZSH_ATTACHMENT_ROOT` کپی می‌کند.
 - پیش از migration، backup و نسخه DB را ثبت کنید؛ در pre-prod همان migrationها را روی PostgreSQL واقعی/نسخه سازگار آزمایش کنید.
 - SQLite برای آزمون سبک است؛ قیود `nulls_distinct` و trigger/locking PostgreSQL را کامل تضمین نمی‌کند.
-- فایل پیوست در `MEDIA_ROOT` محلی ذخیره می‌شود. استراتژی volume/object storage، رمزگذاری در حالت سکون، retention و نسخه پشتیبان فایل به‌صورت deployment موجود نیست.
-- دستور pg_dump/restore، retention، کلید رمزگذاری، restore runbook یا backup خودکار در repository تعریف نشده؛ دستور عمومی امن را تا انتخاب نسخه/زیرساخت سازمانی توصیه نمی‌کنیم.
+- پیوست‌های جدید در `ZSH_ATTACHMENT_ROOT` خصوصی (مطلق، خارج از repository، directory `0700` و file `0600`) ذخیره می‌شوند؛ production باید این متغیر را تنظیم و volume خصوصی پایدار فراهم کند. object-storage adapter یا malware scanner provider واقعی در repository موجود نیست؛ در نبود scanner وضعیت `unscanned` اعلام می‌شود.
+- metadata DB و محتوای `ZSH_ATTACHMENT_ROOT` باید سازگار و با هم backup/restore شوند. سیاست ۲ ماه از بارگذاری، legal hold و purge تأییدشده در [سیاست امنیت پیوست](../attachment-security-fa.md) است؛ backupهای قدیمی جداگانه طبق سیاست سازمان منقضی می‌شوند.
 
 ## لاگ، سلامت و عیب‌یابی
 

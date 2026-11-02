@@ -140,6 +140,11 @@ USE_TZ = True
 STATIC_URL = "/static/"
 MEDIA_URL = "/media/"
 MEDIA_ROOT = BASE_DIR / "media"
+ZSH_ATTACHMENT_ROOT = Path(
+    env("ZSH_ATTACHMENT_ROOT", str(Path.home() / ".local/share/zsh-leave/attachments")),
+).expanduser().resolve()
+ZSH_ATTACHMENT_SCANNER = env("ZSH_ATTACHMENT_SCANNER", "").strip()
+ZSH_ATTACHMENT_RETENTION_MONTHS = 2
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 

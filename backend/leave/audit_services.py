@@ -85,6 +85,9 @@ SNAPSHOT_FIELDS = {
     "LeaveRequestAttachment": {
         "requestId": "request_id", "uploadedById": "uploaded_by_id",
         "contentType": "content_type", "fileSize": "file_size",
+        "scanStatus": "scan_status", "deletionStatus": "deletion_status",
+        "legalHold": "legal_hold", "deletionRequestedAt": "deletion_requested_at",
+        "deletedAt": "deleted_at", "deletedById": "deleted_by_id",
     },
     "BradfordNote": {
         "employeeId": "employee_id", "updatedById": "updated_by_id",

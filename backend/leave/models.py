@@ -5,6 +5,7 @@ from django.conf import settings
 from django.db import models, transaction
 from django.db.models import Q
 
+from .attachment_storage import PrivateAttachmentStorage
 from zsh_core import workflow as wf
 
 STATUS_CHOICES = [(s, s) for s in (wf.PENDING, wf.ESCALATED, wf.APPROVED, wf.REJECTED,
@@ -750,19 +751,50 @@ class LeaveRequestComment(_AppendOnly):
 
 
 def attachment_upload_path(instance, filename):
-    name = filename.replace("\\", "/").rsplit("/", 1)[-1]
-    extension = name.rsplit(".", 1)[-1].lower() if "." in name else ""
+    extension = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
     if extension not in {"pdf", "png", "jpg", "jpeg"}:
-        extension = "bin"
+        raise ValueError("Unsupported attachment extension.")
     return f"leave-attachments/{instance.request_id}/{uuid.uuid4().hex}.{extension}"
 
 
 class LeaveRequestAttachment(models.Model):
+    SCAN_UNSCANNED = "unscanned"
+    SCAN_CLEAN = "clean"
+    SCAN_STATUS_CHOICES = [
+        (SCAN_UNSCANNED, "Unscanned"),
+        (SCAN_CLEAN, "Clean"),
+    ]
+    DELETION_ACTIVE = "active"
+    DELETION_PENDING = "pending"
+    DELETION_DELETED = "deleted"
+    DELETION_STATUS_CHOICES = [
+        (DELETION_ACTIVE, "Active"),
+        (DELETION_PENDING, "Deletion pending"),
+        (DELETION_DELETED, "Deleted"),
+    ]
+
     request = models.ForeignKey(LeaveRequest, on_delete=models.PROTECT, related_name="attachments")
-    file = models.FileField(upload_to=attachment_upload_path)
+    file = models.FileField(
+        upload_to=attachment_upload_path,
+        storage=PrivateAttachmentStorage(),
+    )
     file_name = models.CharField(max_length=255)
     content_type = models.CharField(max_length=100)
     file_size = models.PositiveBigIntegerField()
+    scan_status = models.CharField(
+        max_length=16, choices=SCAN_STATUS_CHOICES, default=SCAN_UNSCANNED,
+    )
+    deletion_status = models.CharField(
+        max_length=16, choices=DELETION_STATUS_CHOICES, default=DELETION_ACTIVE,
+    )
+    legal_hold = models.BooleanField(default=False)
+    deletion_requested_at = models.DateTimeField(null=True, blank=True)
+    deleted_at = models.DateTimeField(null=True, blank=True)
+    deleted_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True,
+        on_delete=models.PROTECT, related_name="deleted_attachments",
+    )
+    deletion_reason = models.CharField(max_length=500, blank=True)
     uploaded_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT)
     created_at = models.DateTimeField(auto_now_add=True)
 
