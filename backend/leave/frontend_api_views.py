@@ -1140,6 +1140,10 @@ def _bradford_report(request, context) -> Response:
 @api_view(["GET"])
 def reports(request, kind: str):
     context = _context(request)
+    return _report_response(request, context, kind)
+
+
+def _report_response(request, context, kind: str) -> Response:
     if kind == "bradford":
         if not context.has_role("hr"):
             return _failure("permission_denied", "گزارش Bradford فقط برای HR دارای دامنه مجاز است", 403)

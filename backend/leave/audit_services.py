@@ -117,6 +117,7 @@ SAFE_EXTRA_KEYS = {
         "source_entitlement_id", "entitlementId", "employeeId", "leaveTypeId", "year",
     },
     "BradfordNote": {"contentChanged"},
+    "Export": {"dataset", "format", "filters", "scope", "rowCount"},
 }
 SENSITIVE_KEYS = {
     "body", "comment", "decision_comment", "email", "medical", "password", "reason",

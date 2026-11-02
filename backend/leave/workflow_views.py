@@ -94,7 +94,21 @@ def _hr_for(context, req: LeaveRequest) -> bool:
     )
 
 
-def _payload(req: LeaveRequest, context) -> dict:
+def _privacy_setting():
+    return SystemSetting.objects.filter(
+        key="privacy.employee_sees_own_confidential_type",
+    ).values_list("value", flat=True).first()
+
+
+_UNSET_PRIVACY_SETTING = object()
+
+
+def _payload(
+    req: LeaveRequest,
+    context,
+    *,
+    privacy_setting=_UNSET_PRIVACY_SETTING,
+) -> dict:
     is_hr = _hr_for(context, req)
     roles = set()
     if context.employee_id is not None:
@@ -126,9 +140,8 @@ def _payload(req: LeaveRequest, context) -> dict:
         working_days=str(req.working_days),
     )
     settings = settings_schema.defaults()
-    privacy_setting = SystemSetting.objects.filter(
-        key="privacy.employee_sees_own_confidential_type",
-    ).values_list("value", flat=True).first()
+    if privacy_setting is _UNSET_PRIVACY_SETTING:
+        privacy_setting = _privacy_setting()
     if privacy_setting is not None:
         settings["privacy.employee_sees_own_confidential_type"] = privacy_setting
     result = serialize_request(viewer, facts, settings)

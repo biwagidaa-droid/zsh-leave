@@ -54,6 +54,7 @@ from .workflow_views import (
     leave_request_events,
     leave_requests,
 )
+from .export_views import exports
 
 urlpatterns = [
     path("auth/login", login, name="auth-login"),
@@ -93,6 +94,7 @@ urlpatterns = [
     path("departments/<int:department_id>/", departments, name="department-detail"),
     path("coverage/", coverage, name="coverage"),
     path("reports/<str:kind>", reports, name="reports"),
+    path("exports/<str:dataset>.<str:file_format>", exports, name="exports"),
     path("admin/settings/", settings_api, name="admin-settings"),
     path("admin/jobs/", jobs, name="admin-jobs"),
     path("audit/events/", audit_events, name="audit-events"),
