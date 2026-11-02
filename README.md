@@ -58,7 +58,7 @@ npm run build
 
 ## استقرار
 
-تنظیمات production در `config.settings_prod` قرار دارد و به PostgreSQL، کلید معتبر و `ZSH_ALLOWED_HOSTS` نیاز دارد. فایل‌های deployment عملیاتی، backup infrastructure و پایش production در این مخزن فراهم نیست؛ یک script و runbook محدود برای backup و restore staging در [راهنمای فارسی بازیابی](docs/backup-restore-fa.md) موجود است. وضعیت backup production **NOT VERIFIED** است. قبل از استفاده واقعی، [چک‌لیست آمادگی تولید](docs/final-documentation/09-production-readiness-checklist.md) و [راهنمای مدیر سامانه](docs/final-documentation/06-system-administrator-guide.md) را بررسی و همه gateهای محیط هدف را با شواهد ببندید.
+تنظیمات production در `config.settings_prod` قرار دارد و به PostgreSQL، کلید معتبر و `ZSH_ALLOWED_HOSTS` نیاز دارد. فایل‌های deployment عملیاتی، backup infrastructure و پایش production در این مخزن فراهم نیست؛ runbookهای فارسی [اعلان‌ها](docs/notifications-fa.md) و [backup/restore staging](docs/backup-restore-fa.md) محدودیت‌ها و رویه‌ها را مشخص می‌کنند. وضعیت backup production **NOT VERIFIED** است. قبل از استفاده واقعی، [چک‌لیست آمادگی تولید](docs/final-documentation/09-production-readiness-checklist.md) و [راهنمای مدیر سامانه](docs/final-documentation/06-system-administrator-guide.md) را بررسی و همه gateهای محیط هدف را با شواهد ببندید.
 
 ## وضعیت اصلاحات مهندسی
 

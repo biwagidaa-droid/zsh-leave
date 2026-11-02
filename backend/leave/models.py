@@ -813,6 +813,88 @@ class NotificationRead(models.Model):
         ]
 
 
+class NotificationDelivery(models.Model):
+    SOURCE_REQUEST_EVENT = "request_event"
+    SOURCE_ENTITLEMENT_EVENT = "entitlement_event"
+    SOURCE_ACTIVATION = "activation"
+    SOURCE_CHOICES = [
+        (SOURCE_REQUEST_EVENT, "Request event"),
+        (SOURCE_ENTITLEMENT_EVENT, "Entitlement event"),
+        (SOURCE_ACTIVATION, "Account activation"),
+    ]
+    CHANNEL_EMAIL = "email"
+    CHANNEL_CHOICES = [(CHANNEL_EMAIL, "Email")]
+    STATUS_QUEUED = "queued"
+    STATUS_SENDING = "sending"
+    STATUS_SENT = "sent"
+    STATUS_DELIVERED = "delivered"
+    STATUS_FAILED = "failed"
+    STATUS_UNAVAILABLE = "unavailable"
+    STATUS_CHOICES = [
+        (STATUS_QUEUED, "Queued"),
+        (STATUS_SENDING, "Sending"),
+        (STATUS_SENT, "Accepted by provider"),
+        (STATUS_DELIVERED, "Delivered"),
+        (STATUS_FAILED, "Failed"),
+        (STATUS_UNAVAILABLE, "Unavailable"),
+    ]
+
+    recipient = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT)
+    source_type = models.CharField(max_length=32, choices=SOURCE_CHOICES)
+    request_event = models.ForeignKey(
+        LeaveRequestEvent, null=True, blank=True, on_delete=models.PROTECT,
+    )
+    entitlement_event = models.ForeignKey(
+        EntitlementEvent, null=True, blank=True, on_delete=models.PROTECT,
+    )
+    invitation = models.ForeignKey(
+        EmployeeInvitation, null=True, blank=True, on_delete=models.PROTECT,
+    )
+    channel = models.CharField(max_length=16, choices=CHANNEL_CHOICES, default=CHANNEL_EMAIL)
+    idempotency_key = models.CharField(max_length=160, unique=True)
+    provider = models.CharField(max_length=64, default="django_email")
+    status = models.CharField(
+        max_length=16, choices=STATUS_CHOICES, default=STATUS_QUEUED, db_index=True,
+    )
+    attempt_count = models.PositiveSmallIntegerField(default=0)
+    retry_after = models.DateTimeField(null=True, blank=True, db_index=True)
+    last_error_code = models.CharField(max_length=64, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    sent_at = models.DateTimeField(null=True, blank=True)
+    delivered_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                condition=(
+                    Q(
+                        source_type="request_event",
+                        request_event__isnull=False,
+                        entitlement_event__isnull=True,
+                        invitation__isnull=True,
+                    )
+                    | Q(
+                        source_type="entitlement_event",
+                        request_event__isnull=True,
+                        entitlement_event__isnull=False,
+                        invitation__isnull=True,
+                    )
+                    | Q(
+                        source_type="activation",
+                        request_event__isnull=True,
+                        entitlement_event__isnull=True,
+                        invitation__isnull=False,
+                    )
+                ),
+                name="notification_delivery_source_matches",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["status", "retry_after", "created_at"], name="notif_delivery_due_idx"),
+        ]
+
+
 class BradfordNote(models.Model):
     employee = models.OneToOneField(EmployeeProfile, on_delete=models.CASCADE)
     body = models.TextField()

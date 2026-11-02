@@ -44,7 +44,7 @@ curl -sSI https://leave.example.test/api/v1/health/ -H 'Host: attacker.example'
 ## نصب
 این مخزن فرمان نصب وب/DB را ارائه نمی‌کند. پیش از تعریف deployment، مسئول عملیات باید image/runtime، WSGI server، proxy/TLS، روش secret injection، شبکهٔ خصوصی upstream، volume فایل‌ها، migration و rollback را انتخاب کند. `.env.example` یا دستورهای فرضی Compose در این مخزن مبنای اجرای production نیستند.
 
-پس از انتخاب runtime، پیکربندی SMTP برای ارسال دعوت کارکنان در production لازم است؛ راهنمای متغیرها در [چرخه عمر حساب کارمند](./account-lifecycle-fa.md) است. جدول cache مشترک باید با `DJANGO_SETTINGS_MODULE=config.settings_prod python manage.py createcachetable zsh_cache` ایجاد شود.
+پس از انتخاب runtime، پیکربندی امن email backend برای دعوت و اعلان‌های صف‌شده لازم است؛ متغیرها و وضعیت‌ها در [چرخه عمر حساب کارمند](./account-lifecycle-fa.md) و [سیاست اعلان‌ها](./notifications-fa.md) آمده‌اند. جدول cache مشترک باید با `DJANGO_SETTINGS_MODULE=config.settings_prod python manage.py createcachetable zsh_cache` ایجاد شود.
 
 برای اجرای کارهای زمان‌بندی‌شده، unit و timer systemd و شرط‌های readiness در [راهنمای عملیات پس‌زمینه](./background-jobs-fa.md) را دقیقاً نصب و فعال کنید. بدون این پیکربندی، Jobs API زمان‌بند را پیکربندی‌نشده اعلام می‌کند و readiness production موفق نمی‌شود.
 

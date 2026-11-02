@@ -15,6 +15,7 @@ from rest_framework.test import APIClient
 
 from leave.invitation_services import account_access_allowed, invite_employee
 from leave.employment_services import organization_localdate
+from leave.notification_services import EmailProviderError
 from leave.models import (
     AuditEvent,
     Company,
@@ -275,8 +276,8 @@ class EmployeeInvitationTests(TestCase):
 
     def test_email_provider_connection_failure_keeps_invitation_pending(self):
         with patch(
-            "leave.invitation_services.send_mail",
-            side_effect=OSError("mail service unavailable"),
+            "leave.invitation_services.send_email",
+            side_effect=EmailProviderError("ProviderConnectionError", retryable=True),
         ):
             response = self.issue()
 

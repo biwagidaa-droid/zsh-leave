@@ -56,6 +56,7 @@ DJANGO_SETTINGS_MODULE=config.settings_test python3 manage.py test
 - پیوست‌های جدید در `ZSH_ATTACHMENT_ROOT` خصوصی (مطلق، خارج از repository، directory `0700` و file `0600`) ذخیره می‌شوند؛ production باید این متغیر را تنظیم و volume خصوصی پایدار فراهم کند. object-storage adapter یا malware scanner provider واقعی در repository موجود نیست؛ در نبود scanner وضعیت `unscanned` اعلام می‌شود.
 - metadata DB و محتوای `ZSH_ATTACHMENT_ROOT` باید سازگار و با هم backup/restore شوند. سیاست ۲ ماه از بارگذاری، legal hold و purge تأییدشده در [سیاست امنیت پیوست](../attachment-security-fa.md) است؛ backupهای قدیمی جداگانه طبق سیاست سازمان منقضی می‌شوند.
 - اجرای ایمن، inventory، restore staging و مسیرهای بازیابی رخداد در [راهنمای پشتیبان‌گیری و بازیابی](../backup-restore-fa.md) آمده است. زیرساخت production در این مخزن موجود نیست؛ backup production **NOT VERIFIED** است.
+- رویدادهای in-app، provider ایمیل، صف، retry، مجوز recipient و وضعیت aggregate در [سیاست و عملیات اعلان‌ها](../notifications-fa.md) مستند است؛ push/SMS و receipt واقعی تحویل در کد فعلی وجود ندارد.
 
 ## لاگ، سلامت و عیب‌یابی
 

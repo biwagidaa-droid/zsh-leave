@@ -216,6 +216,10 @@ def _append_event(
             entitlement.save(update_fields=list(allocation_updates))
         finally:
             del entitlement._ledger_write
+    if kind in {"opening", "adjustment", "carry_forward", "expiration"}:
+        from .notification_services import queue_entitlement_event_delivery
+
+        queue_entitlement_event_delivery(event)
     return event
 
 

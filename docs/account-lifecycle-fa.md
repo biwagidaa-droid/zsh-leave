@@ -39,7 +39,7 @@
 
 ## پیکربندی ایمیل و محیط توسعه
 
-ارسال ایمیل تا زمانی که `ZSH_EMAIL_ENABLED=1`، `ZSH_DEFAULT_FROM_EMAIL` و `ZSH_PUBLIC_BASE_URL` تنظیم نشده باشند انجام‌شده تلقی نمی‌شود. در این حالت وضعیت دعوت `invitation_pending` باقی می‌ماند و API خطای سرویس unavailable برمی‌گرداند؛ سامانه نباید موفقیت ارسال را اعلام کند. خطاهای اتصال SMTP نیز دعوت را pending نگه می‌دارند تا HR بتواند دوباره تلاش کند.
+ارسال دعوت تا زمانی که `ZSH_EMAIL_ENABLED=1`، `ZSH_DEFAULT_FROM_EMAIL` و `ZSH_PUBLIC_BASE_URL` تنظیم نشده باشند انجام‌شده تلقی نمی‌شود. در این حالت وضعیت دعوت `invitation_pending` باقی می‌ماند و API خطای سرویس unavailable برمی‌گرداند؛ سامانه نباید موفقیت ارسال را اعلام کند. `invitation_sent` فقط پذیرش پیام توسط backend را نشان می‌دهد، نه تحویل به inbox. خطاهای provider نیز دعوت را pending نگه می‌دارند تا HR با توکن تازه دوباره تلاش کند.
 
 تنظیمات ارائه‌دهنده:
 
@@ -51,7 +51,7 @@
 - `ZSH_PUBLIC_BASE_URL` (در production باید HTTPS باشد)
 - `ZSH_INVITATION_TOKEN_TTL_HOURS` (پیش‌فرض ۷۲)
 
-برای توسعه محلی، می‌توان با `ZSH_INVITATION_EXPOSE_DEV_LINKS=1` و `DEBUG=True` پیوند فعال‌سازی را فقط در پاسخ API مدیریتی دریافت کرد. پیوند به‌صورت fragment ساخته می‌شود تا توکن در درخواست HTTP مرورگر یا لاگ وب‌سرور ارسال نشود. این متغیر در تنظیم production ممنوع است و در پاسخ production پیوند توسعه بازگردانده نمی‌شود. از backend کنسول ایمیل برای چاپ پیوند استفاده نکنید؛ توکن خام نباید وارد لاگ شود. متغیرهای SMTP را در secret manager محیط production قرار دهید و هرگز در مخزن یا فایل نمونه با مقدار واقعی ثبت نکنید.
+در development، backend پیش‌فرض `django.core.mail.backends.locmem.EmailBackend` است و `ZSH_EMAIL_ENABLED` پیش‌فرض خاموش است؛ پیام واقعی ارسال نمی‌شود مگر backend خارجی و enablement عمداً انتخاب شوند. برای توسعه محلی، می‌توان با `ZSH_INVITATION_EXPOSE_DEV_LINKS=1` و `DEBUG=True` پیوند فعال‌سازی را فقط در پاسخ API مدیریتی دریافت کرد. پیوند به‌صورت fragment ساخته می‌شود تا توکن در درخواست HTTP مرورگر یا لاگ وب‌سرور ارسال نشود. این متغیر در تنظیم production ممنوع است و در پاسخ production پیوند توسعه بازگردانده نمی‌شود. از backend کنسول ایمیل برای چاپ پیوند استفاده نکنید؛ توکن خام نباید وارد لاگ شود. متغیرهای SMTP را در secret manager محیط production قرار دهید و هرگز در مخزن یا فایل نمونه با مقدار واقعی ثبت نکنید. سیاست سایر اعلان‌ها، queue، retry و وضعیت delivery در [راهنمای اعلان‌ها](./notifications-fa.md) است.
 
 ## رخدادهای عملیاتی
 

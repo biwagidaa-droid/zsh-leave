@@ -905,8 +905,10 @@ def _visible_events(context):
         return LeaveRequestEvent.objects.none()
     request_scope = Q()
     if context.employee_id:
-        request_scope |= (
-            Q(employee_id=context.employee_id) | Q(manager_snapshot_id=context.employee_id)
+        request_scope |= Q(employee_id=context.employee_id)
+        request_scope |= Q(
+            manager_snapshot_id=context.employee_id,
+            leave_type__confidential=False,
         )
     if context.has_role("hr"):
         request_scope |= Q(pk__in=scoped_hr_leave_requests(context).values("pk"))
