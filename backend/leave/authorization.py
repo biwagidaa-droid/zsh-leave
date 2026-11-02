@@ -156,7 +156,7 @@ def scoped_hr_leave_requests(context: AuthorizationContext) -> QuerySet[LeaveReq
                 employee__company_id=assignment.company_id,
                 employee_id=assignment.employee_id,
             )
-    return LeaveRequest.objects.filter(filters).distinct() if filters else LeaveRequest.objects.none()
+    return LeaveRequest.objects.filter(filters) if filters else LeaveRequest.objects.none()
 
 
 def scoped_leave_requests(context: AuthorizationContext) -> QuerySet[LeaveRequest]:
@@ -174,7 +174,7 @@ def scoped_leave_requests(context: AuthorizationContext) -> QuerySet[LeaveReques
     hr_queryset = scoped_hr_leave_requests(context)
     if context.has_role(HR):
         filters |= Q(pk__in=hr_queryset.values("pk"))
-    return LeaveRequest.objects.filter(filters).distinct() if filters else LeaveRequest.objects.none()
+    return LeaveRequest.objects.filter(filters) if filters else LeaveRequest.objects.none()
 
 
 def can_view_leave_request(context: AuthorizationContext, leave_request: LeaveRequest) -> bool:
@@ -210,7 +210,7 @@ def scoped_employees(context: AuthorizationContext) -> QuerySet[EmployeeProfile]
         filters |= Q(pk=context.employee_id)
     filters |= Q(pk__in=manager_team_employees(context).values("pk"))
     filters |= Q(pk__in=scoped_hr_employees(context).values("pk"))
-    return EmployeeProfile.objects.filter(filters, is_employee=True).distinct() if filters else (
+    return EmployeeProfile.objects.filter(filters, is_employee=True) if filters else (
         EmployeeProfile.objects.none()
     )
 
@@ -242,7 +242,7 @@ def scoped_hr_employees(context: AuthorizationContext) -> QuerySet[EmployeeProfi
             filters |= Q(company_id=assignment.company_id, department_id=assignment.department_id)
         elif assignment.scope == RoleAssignment.SCOPE_EMPLOYEE:
             filters |= Q(company_id=assignment.company_id, pk=assignment.employee_id)
-    return EmployeeProfile.objects.filter(filters, is_employee=True).distinct() if filters else (
+    return EmployeeProfile.objects.filter(filters, is_employee=True) if filters else (
         EmployeeProfile.objects.none()
     )
 

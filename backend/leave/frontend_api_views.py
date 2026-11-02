@@ -113,7 +113,7 @@ def _site_rows(context):
             filters |= Q(company_id=assignment.company_id)
         elif assignment.scope == RoleAssignment.SCOPE_SITE:
             filters |= Q(pk=assignment.site_id)
-    return OrganizationSite.objects.filter(filters).distinct()
+    return OrganizationSite.objects.filter(filters)
 
 
 def _can_manage_company_sites(context, company_id: int) -> bool:
