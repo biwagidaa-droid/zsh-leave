@@ -48,11 +48,8 @@ curl -sSI https://leave.example.test/api/v1/health/ -H 'Host: attacker.example'
 
 برای اجرای کارهای زمان‌بندی‌شده، unit و timer systemd و شرط‌های readiness در [راهنمای عملیات پس‌زمینه](./background-jobs-fa.md) را دقیقاً نصب و فعال کنید. بدون این پیکربندی، Jobs API زمان‌بند را پیکربندی‌نشده اعلام می‌کند و readiness production موفق نمی‌شود.
 
-## پشتیبان‌گیری
-`pg_dump -Fc` شبانه + backup سازگار از `ZSH_ATTACHMENT_ROOT`؛ رمزگذاری با کلید جدا؛ نگهداری چرخشی. metadata و فایل باید با هم backup و restore شوند. مسیر خصوصی فایل و سیاست زمان‌بندی/تأیید حذف در [سیاست پیوست‌ها](./attachment-security-fa.md) مستند است.
-
-## بازیابی (باید در محیط جدا آزمون شود)
-ایجاد DB خالی → `pg_restore` → بازگردانی volume فایل‌ها → `migrate --check` → Health → مقایسه شمارش رکوردها و مجموع مانده با قبل از پشتیبان. گزارش آزمون در `docs/test-report.md`.
+## پشتیبان‌گیری و بازیابی
+اسکریپت fail-closed، inventory و runbook فارسی در [راهنمای پشتیبان‌گیری و بازیابی](./backup-restore-fa.md) آمده است. این repository فاقد backup destination/offsite، scheduler/alert و PostgreSQL production است؛ فقط یک drill مصنوعی روی دو container موقت PostgreSQL انجام شد. backup production **NOT VERIFIED** و restore drill روی زیرساخت production **NOT RUN** محسوب می‌شوند. تا restore drill محیط واقعی موفق، هیچ backup production را معتبر اعلام نکنید.
 
 ## پیش‌نیازهای شبکه داخلی
 گواهی TLS داخلی، SMTP داخلی (OQ-13)، دسترسی ذخیره‌سازی/پشتیبان، DNS، فهرست کاربران اولیه و ساختار سازمانی (OQ-11)، مالک سیاست مرخصی در HR.
