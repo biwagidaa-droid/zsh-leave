@@ -1,12 +1,10 @@
 # گزارش آزمون
 
-## سخت‌سازی پیوست‌های HR (۲ نوامبر ۲۰۲۶)
+## سخت‌سازی اسکن و دانلود پیوست‌های HR (۳ نوامبر ۲۰۲۶)
 
-- `DJANGO_SETTINGS_MODULE=config.settings_test python manage.py test --verbosity 1` — **۳۵۹ تست موفق، ۱۴ مورد skip**. آزمون‌ها روی SQLite اجرا شدند؛ هشدار محدودیت SQLite برای `nulls_distinct` باقی است و نتیجه، سازگاری PostgreSQL را اثبات نمی‌کند. زنجیرهٔ migration تا `leave.0019_attachment_security` روی پایگاه تست خالی اعمال شد.
-- گروه متمرکز `leave.tests.test_attachment_security`، `FrontendApiTests.test_request_attachments_are_validated_and_downloaded_through_authorized_route` و `RateLimitingTests` — **۲۶ تست موفق**؛ شامل فایل مجاز/نامعتبر، حد اندازه، MIME/signature/parser، path traversal در ورودی خام validator، مجوز مالک/HR، cross-company، پاسخ دانلود، storage failure، cleanup پس از شکست DB، scanner unavailable/reject/accept، کپی/hash-check فایل legacy، legal hold و purge.
-- تست‌های تنظیمات production — **۵ تست** برای تنظیم storage خصوصی خارج از repository و رفتارهای قبلی؛ کل suite نهایی نیز موفق شد. `manage.py check` و `check --deploy --tag security` با مقادیر آزمایشی production — بدون مشکل.
-- `makemigrations --check --dry-run` — `No changes detected`; `git diff --check` — موفق.
-- provider واقعی malware scanner، filesystem/volume و permissionهای deployment، backup/restore هماهنگ DB و فایل، مهاجرت دادهٔ واقعی و آزمون production/PostgreSQL در این محیط تأیید نشده‌اند. تا پیکربندی provider، وضعیت فایل `unscanned` است. راهنمای عملیات و محدودیت‌ها در `docs/attachment-security-fa.md` آمده‌اند.
+- تست‌های `leave.tests.test_attachment_security`، `CacheReadinessTests` و تست API مجاز دانلود — **۲۵ تست موفق** در SQLite؛ شامل clean-only download، scope مالک/HR، file missing/deleted/symlink، parser/MIME/size/path traversal، جلوگیری از نوشتن از مسیر symlink، scanner unavailable/reject/accept/timeout/crash/nonzero/invalid JSON/خروجی بزرگ، retry idempotent، Audit و purge.
+- تست readiness پیکربندی scanner، `manage.py check`، `makemigrations --check --dry-run` و `py_compile` موفق شدند.
+- provider واقعی malware scanner، protocol wrapper سازمانی، filesystem/volume و permissionهای deployment، backup/restore هماهنگ DB و فایل، مهاجرت دادهٔ واقعی و آزمون production/PostgreSQL در این محیط تأیید نشده‌اند. Production اکنون بدون `ZSH_ATTACHMENT_SCANNER_COMMAND` fail-fast می‌شود و هیچ فایل غیر clean قابل دانلود نیست؛ provider واقعی همچنان **NOT VERIFIED** است. راهنمای عملیات و محدودیت‌ها در `docs/attachment-security-fa.md` آمده‌اند.
 
 ## بازبینی HTTPS و reverse proxy (۲ نوامبر ۲۰۲۶)
 

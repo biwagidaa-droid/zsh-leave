@@ -50,7 +50,7 @@ curl -sSI https://leave.example.test/api/v1/health/ -H 'Host: attacker.example'
 
 این مخزن Docker/Compose یا unit وب ندارد؛ unit زیر مسیر release نمونهٔ رسمی systemd است. آن را کنار unit سرویس برنامه نصب کنید. فایل environment باید همان متغیرهای production از جمله `ZSH_SECRET_KEY`، `ZSH_DB_*`، `ZSH_ALLOWED_HOSTS` و `ZSH_ATTACHMENT_ROOT` را داشته باشد و فقط برای root و گروه سرویس قابل‌خواندن باشد.
 
-کاربر اجرایی هر دو مرحلهٔ Migration و Provisioning، کاربر سیستم‌عامل `zsh-leave` است؛ این فرایند از همان فایل environment و virtualenv سرویس jobs استفاده می‌کند. در هر release، قبل از شروع یا فعال‌کردن Web Workerها اجرا کنید:
+کاربر اجرایی هر دو مرحلهٔ Migration و Provisioning، کاربر سیستم‌عامل `zsh-leave` است؛ این فرایند از همان فایل environment و virtualenv سرویس jobs استفاده می‌کند. فایل environment باید متغیرهای production شامل `ZSH_SECRET_KEY`، `ZSH_DB_*`، `ZSH_ALLOWED_HOSTS`، `ZSH_ATTACHMENT_ROOT` و فرمان اسکنر `ZSH_ATTACHMENT_SCANNER_COMMAND` را داشته باشد. Web/Jobs نیز باید همان تنظیم Scanner را داشته باشند؛ نمونهٔ فرمت و قرارداد stdout در [Runbook پیوست‌ها](./attachment-security-fa.md) است. در هر release، قبل از شروع یا فعال‌کردن Web Workerها اجرا کنید:
 
 ```sh
 sudo install -o root -g root -m 0644 deploy/systemd/zsh-leave-release.service /etc/systemd/system/zsh-leave-release.service
@@ -71,7 +71,7 @@ python manage.py sync_runtime_db_grants --settings=config.settings_prod
 
 پیش از migration، نقش‌ها و مالکیت را مطابق [Runbook نقش‌ها و تاریخچهٔ PostgreSQL](./postgresql-role-security-fa.md) با DBA تنظیم کنید. release unit از فایل جداگانهٔ `/etc/zsh-leave/zsh-leave-migrate.env` استفاده می‌کند: `ZSH_DB_USER=zsh_migrator`، رمز migration از secret manager، و `PGOPTIONS="-c role=zsh_schema_owner"`. این عضویت فقط اجازهٔ `SET ROLE` می‌دهد، نه ارث‌بری؛ نقش `zsh_app` در فایل محیطی Web/Jobs باید جداگانه تنظیم شود و هیچ عضویتی در نقش مالک نداشته باشد. پس از migration، unit جدول cache را provision و با `sync_runtime_db_grants` مجوزهای runtime/backup را همگام می‌کند؛ هر سه مرحله باید موفق باشند، وگرنه انتشار را متوقف کنید.
 
-پس از بالا آمدن وب، `GET /api/v1/ready/` باید `200` و checkهای `database`، `cache` و (در production) `scheduler` را موفق گزارش کند؛ در غیر این صورت `503` می‌دهد. برای عیب‌یابی، لاگ unit را با `sudo journalctl -u zsh-leave-release.service --no-pager` ببینید، اتصال و نقش/مالکیت release را بررسی کنید و در صورت شکست provisioning، unit را پس از رفع خطا دوباره اجرا کنید. readiness از کلید تصادفی کوتاه‌عمر برای آزمون set/get/delete استفاده می‌کند؛ کلید عملیات را لمس نمی‌کند.
+پس از بالا آمدن وب، `GET /api/v1/ready/` باید `200` و checkهای `database`، `cache`، پیکربندی Scanner و (در production) `scheduler` را موفق گزارش کند؛ در غیر این صورت `503` می‌دهد. این readiness وجود/قابل‌اجرابودن executable را بررسی می‌کند، نه صحت اتصال یا امضای موتور ضدبدافزار؛ آزمون provider واقعی را در staging انجام دهید. برای عیب‌یابی، لاگ unit را با `sudo journalctl -u zsh-leave-release.service --no-pager` ببینید، اتصال و نقش/مالکیت release را بررسی کنید و در صورت شکست provisioning، unit را پس از رفع خطا دوباره اجرا کنید. readiness cache از کلید تصادفی کوتاه‌عمر برای آزمون set/get/delete استفاده می‌کند؛ کلید عملیات را لمس نمی‌کند.
 
 برای اجرای کارهای زمان‌بندی‌شده، unit و timer systemd و شرط‌های readiness در [راهنمای عملیات پس‌زمینه](./background-jobs-fa.md) را دقیقاً نصب و فعال کنید. بدون این پیکربندی، Jobs API زمان‌بند را پیکربندی‌نشده اعلام می‌کند و readiness production موفق نمی‌شود.
 

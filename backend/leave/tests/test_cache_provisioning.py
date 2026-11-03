@@ -86,6 +86,26 @@ class CacheReadinessTests(TestCase):
         checks = {check["name"]: check["ok"] for check in response.json()["checks"]}
         self.assertTrue(checks["cache"])
 
+    def test_required_attachment_scanner_configuration_affects_readiness(self):
+        client = APIClient()
+        with override_settings(
+            ZSH_ATTACHMENT_SCANNER_REQUIRED=True,
+            ZSH_ATTACHMENT_SCANNER_COMMAND=[],
+        ):
+            unavailable = client.get("/api/v1/ready/")
+        self.assertEqual(unavailable.status_code, 503)
+        checks = {check["name"]: check["ok"] for check in unavailable.json()["checks"]}
+        self.assertFalse(checks["attachment_scanner"])
+
+        with override_settings(
+            ZSH_ATTACHMENT_SCANNER_REQUIRED=True,
+            ZSH_ATTACHMENT_SCANNER_COMMAND=["/usr/bin/true"],
+        ):
+            configured = client.get("/api/v1/ready/")
+        self.assertEqual(configured.status_code, 200)
+        checks = {check["name"]: check["ok"] for check in configured.json()["checks"]}
+        self.assertTrue(checks["attachment_scanner"])
+
 
 class SharedDatabaseThrottleTests(TestCase):
     @skipUnless(connection.vendor == "postgresql", "Requires PostgreSQL.")

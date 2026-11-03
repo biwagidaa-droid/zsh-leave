@@ -53,7 +53,7 @@ Backend از نظر قابلیت‌های اصلی به بلوغ قابل‌تو
 | Bradford | **قابل‌اجرا اما provisional** | فرمول/دامنه/حریم خصوصی تست شده؛ سیاست تقویمی و انواع مشمول هنوز تصویب نشده، پس خروجی مبنای تصمیم نهایی HR نیست. |
 | Scheduler و Background Jobs | **کد و تست موجود؛ استقرار NOT VERIFIED** | DB-backed و نمونهٔ systemd موجود؛ اجرای دستی/آزمایشگاهی جای timer فعال و پایدار را نمی‌گیرد. |
 | Notification delivery | **منطق صف تست‌شده؛ provider NOT VERIFIED** | outbox و تکرار job تست شده؛ SMTP واقعی، bounce، push/SMS و رسید تحویل تأیید نشده‌اند. |
-| Attachment security | **کد/test موجود؛ زیرساخت NOT VERIFIED** | ACL، اعتبارسنجی، hash restore تست شده؛ storage پایدار و scanner در محیط واقعی اثبات نشده‌اند؛ scanner خالی یعنی فایل «unscanned». |
+| Attachment security | **کد/test fail-closed؛ Integration NOT VERIFIED** | فقط فایل `clean` از endpoint scopeشده دانلود می‌شود؛ Production بدون command اسکنر fail-fast است. provider واقعی، volume پایدار و integration staging/Production اثبات نشده‌اند. |
 | DB و Migration compatibility | **PostgreSQL test PASS در P20؛ Production NOT VERIFIED** | P20 اجرای ۲۰ migration و suite PostgreSQL 17.11 را ثبت کرده؛ upgrade داده‌دار، نسخهٔ DB مقصد و سازگاری rolling deploy اثبات نشده‌اند. |
 | Backup/Restore | **drill مصنوعی موفق؛ Production NOT VERIFIED** | restore دو container با دادهٔ synthetic در P20 ثبت شده؛ offsite، زمان بازیابی واقعی، تناوب و alert وجود ندارد/تأیید نشده است. |
 | HTTPS و Reverse Proxy | **تنظیمات/آزمون کد موجود؛ اتصال واقعی NOT VERIFIED** | HTTPS redirect، HSTS، cookie امن و trusted proxy در settings/test؛ TLS، شبکه و هدرهای proxy مقصد اجرا نشده‌اند. |
@@ -76,7 +76,7 @@ Backend از نظر قابلیت‌های اصلی به بلوغ قابل‌تو
 | R4 | **HIGH** | deployment مقصد، `backend/config/settings_prod.py`، `deploy/` | production DB role، topology وب، proxy/TLS، secret injection و network boundary واقعی موجود/تأییدشده نیستند. security check با dummy env صرفاً پیکربندی Django را بررسی می‌کند. | یک staging واقعی و جدا از production بسازید؛ DB با کمترین privilege، secret manager، WSGI/server، reverse proxy، TLS و firewall را راه‌اندازی و آزمون کنید. |
 | R5 | **HIGH** | `deploy/backup/`، [راهنمای backup/restore](./backup-restore-fa.md) | restore synthetic موفق است؛ backup زمان‌بندی‌شده، کپی offsite مستقل، retention/alert، RPO/RTO با حجم واقعی و restore Production **NOT VERIFIED** هستند. | backup رمز‌شده و offsite، alert تازگی/شکست و restore drill دوره‌ای روی staging واقعی؛ RPO/RTO قابل‌اندازه‌گیری را با مالک سرویس تصویب کنید. |
 | R6 | **HIGH** | `deploy/systemd/`، `backend/leave/job_services.py` | job service و timer نمونه وجود دارد؛ نصب/فعال‌بودن timer/worker در میزبان مقصد ثابت نشده. نبود اجرا می‌تواند اعلان/یادآوری، escalation یا jobهای زمان‌بندی‌شده را عقب بیندازد. | timer را در staging فعال کنید؛ اجرای due job، lease/retry، heartbeat، restart host، اجرای هم‌زمان دو worker و alert شکست/عقب‌ماندگی را آزمون کنید. سیاست‌های rollover/expiration خاموش را تا تأیید HR روشن نکنید. |
-| R7 | **HIGH** | `backend/leave/attachment_storage.py`، `attachment_security.py`، `backend/config/settings_prod.py` | کد private storage و تست ACL وجود دارد، اما volume پایدار/مجوز OS و scanner واقعی تأیید نشده؛ حالت scanner بدون تنظیم «unscanned» است. | volume خارج repository با backup همگام، owner/permission محدود، محدودیت ظرفیت، retention و scanner fail-closed طبق سیاست سازمان تنظیم و در staging با فایل بی‌خطر/آلودهٔ آزمایشی بررسی شود. |
+| R7 | **HIGH** | `backend/leave/attachment_storage.py`، `attachment_security.py`، `attachment_scanning.py`، `backend/config/settings_prod.py` | دانلود به `clean` محدود و config scanner در Production اجباری است؛ volume پایدار/مجوز OS و provider واقعی هنوز تأیید نشده‌اند. | volume خارج repository با backup همگام، owner/permission محدود، محدودیت ظرفیت، retention و scanner واقعی طبق adapter قراردادشده پیکربندی و در staging با فایل بی‌خطر و نمونهٔ تست آلودهٔ سازمانی بررسی شود. |
 | R8 | **HIGH** | `backend/config/settings_base.py`، `backend/config/settings_prod.py`، عملیات | P20 نبود log aggregation، alert، retention، backup freshness alert، scheduler alert و incident paging را ثبت می‌کند. | لاگ ساختاریافته با redaction، شناسهٔ correlation، مانیتور خطای API/DB، job lag، queue، backup، storage و certificate expiry را به سامانهٔ عملیاتی وصل کنید؛ مالک/آستانه/مسیر escalation تعیین شود. |
 | R9 | **MEDIUM** | `backend/leave/authorization.py`، `authentication_classes.py`، account lifecycle | session هشت‌ساعته است و اشتغال در request بعدی بررسی می‌شود؛ revoke پیش‌دستانه/session version وجود ندارد. رفتار پس از termination به فاصله تا درخواست بعدی وابسته است. | پیش از انتشار، risk acceptance برای session termination بگیرید؛ حداکثر زمان revoke را تعیین و logout/offboard/session موجود را در تست E2E تأیید کنید. |
 | R10 | **MEDIUM** | `backend/leave/employment_services.py`، `invitation_services.py` و policyهای HR | end-date و activation آزمون دارند؛ rehire با دوره‌های مجزا، سابقهٔ کامل lifecycle و تکلیف درخواست‌های pending هنگام offboarding تصمیم/تست کامل ندارند. | سیاست HR برای rehire، future end-date، غیرفعال‌سازی، درخواست‌های باز و نگهداری تاریخچه را تصویب و سناریوهای مرزی را تست کنید. |
@@ -106,7 +106,7 @@ Backend از نظر قابلیت‌های اصلی به بلوغ قابل‌تو
 
 - [ ] محیط، DNS، حساب‌ها، secretها، DB، storage و SMTP از Production جدا باشند؛ دادهٔ واقعی HR کپی نشود مگر با تصویب/ناشناس‌سازی رسمی.
 - [ ] نسخهٔ PostgreSQL مقصد را ثبت کنید؛ با role واقعی app و role مجزای backup وصل شوید؛ app مالک schema/tableهای Audit نباشد.
-- [ ] secrets را از secret manager وارد کنید: `ZSH_SECRET_KEY`، `ZSH_DB_*`، `ZSH_ALLOWED_HOSTS`، `ZSH_CSRF_TRUSTED_ORIGINS`، `ZSH_TRUSTED_PROXY_IPS`، `ZSH_ATTACHMENT_ROOT` و email/scanner settings.
+- [ ] secrets را از secret manager وارد کنید: `ZSH_SECRET_KEY`، `ZSH_DB_*`، `ZSH_ALLOWED_HOSTS`، `ZSH_CSRF_TRUSTED_ORIGINS`، `ZSH_TRUSTED_PROXY_IPS`، `ZSH_ATTACHMENT_ROOT`، `ZSH_ATTACHMENT_SCANNER_COMMAND` و email settings.
 - [ ] app فقط از شبکهٔ داخلی/Unix socket قابل‌دسترسی باشد؛ TLS، certificate chain، Host، HSTS، redirect و proxy trust با دامنه و peer واقعی آزموده شوند.
 - [ ] پیش از ترافیک، `createcachetable zsh_cache` را طبق runbook اجرا و health، throttling، رفتار چند process و restart را تأیید کنید.
 - [ ] `check --deploy --tag security` و `makemigrations --check --dry-run` را با config staging واقعی اجرا و خروجی/هش نسخه را نگه دارید؛ بررسی system check به‌تنهایی جای آزمون درخواست واقعی نیست.
@@ -126,7 +126,7 @@ Backend از نظر قابلیت‌های اصلی به بلوغ قابل‌تو
 - [ ] ledger: balance پیش/پس، رزرو، approval، cancellation/withdrawal، adjustment، import معتبر/نامعتبر/تکراری و rollback را با مقادیر کوچک کنترل کنید؛ reconciliation قبل/بعد باید ثبت شود.
 - [ ] rollover/expiration را تا تصویب policy خاموش نگه دارید؛ در صورت تصویب، اجرای job را فقط روی data fixture و سپس روی مجموعهٔ آزمایشی مستقل بررسی کنید.
 - [ ] Bradford را با دادهٔ مرجع HR و سیاست تصویب‌شده تطبیق دهید؛ تا امضا، خروجی را provisional و غیرقابل‌استفاده برای تصمیم قطعی علامت بزنید.
-- [ ] پیوست را با انواع/اندازه‌های مجاز و نامعتبر، دانلود employee/HR مجاز و سایر نقش‌ها، scanner unavailable، حذف/retention و restore hash بررسی کنید.
+- [ ] پیوست را با انواع/اندازه‌های مجاز و نامعتبر، دانلود employee/HR مجاز و سایر نقش‌ها، `pending_scan/rejected/scanner_unavailable/scan_failed`، timeout، retry و symlink بررسی کنید. نمونهٔ scanner آلوده را فقط از fixture تست سازمانی بگیرید؛ هرگز از بدافزار واقعی استفاده نکنید.
 - [ ] اعلان‌های invitation، approved/rejected/reminder را از outbox تا SMTP آزمایشی دنبال کنید؛ خطای provider، retry، duplicate prevention و bounce را ثبت کنید.
 - [ ] Exportهای CSV/XLSX را برای scope، داده محرمانه، formula injection، row/date limit، encoding فارسی و عدم persistence فایل روی server بررسی کنید.
 
@@ -152,7 +152,7 @@ Backend از نظر قابلیت‌های اصلی به بلوغ قابل‌تو
 - [ ] مالک HR سیاست workflow، entitlement/year/rollover، Bradford، lifecycle، notification، retention و دسترسی دو‌نقشی را تصویب کرده باشد.
 - [ ] image/artifact immutable با commit، SBOM/dependency scan، build Frontend و test report مشخص ساخته شود؛ image ساخته‌نشده/دستی در Production deploy نشود.
 - [ ] PostgreSQL نسخه‌دار/پشتیبانی‌شده، TLS DB در صورت نیاز، backup user جدا، app role کم‌اختیار و grants Audit مستند باشند.
-- [ ] secretها در secret manager؛ کلیدها، SMTP، domain/CSRF، trusted proxy CIDR، attachment root و scanner با مقادیر واقعی و جدا از Staging تنظیم شوند.
+- [ ] secretها در secret manager؛ کلیدها، SMTP، domain/CSRF، trusted proxy CIDR، attachment root و scanner command با مقادیر واقعی و جدا از Staging تنظیم شوند.
 - [ ] reverse proxy، TLS، Host، HSTS، cookie secure، CSRF، network ACL و جلوگیری از دسترسی مستقیم به upstream از شبکهٔ عمومی در rehearsal تأیید شده باشد.
 - [ ] `zsh_cache` قبل از عبور ترافیک provision شود؛ deploy در صورت فقدان table متوقف شود.
 - [ ] backup encrypted/offsite با retention و alert فعال باشد؛ restore drill اخیر، زمان بازیابی و RPO/RTO پذیرفته‌شده موجود باشد.

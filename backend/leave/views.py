@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
+import os
 import uuid
+from pathlib import Path
 
 from django.conf import settings
 from django.core.cache import cache
@@ -47,6 +49,18 @@ def _cache_readiness_check():
         )
         return False
     return True
+
+
+def _attachment_scanner_readiness_check():
+    command = settings.ZSH_ATTACHMENT_SCANNER_COMMAND
+    executable = command[0] if command else ""
+    return bool(
+        settings.ZSH_ATTACHMENT_PRLIMIT
+        and executable
+        and Path(executable).is_absolute()
+        and Path(executable).is_file()
+        and os.access(executable, os.X_OK)
+    )
 
 
 @api_view(["GET"])
@@ -102,7 +116,21 @@ def readiness_check(request):
             "message": "scheduler is not required in this environment",
         })
 
-    ready = database_ok and cache_ok and scheduler_ok
+    scanner_required = settings.ZSH_ATTACHMENT_SCANNER_REQUIRED
+    scanner_ok = not scanner_required or _attachment_scanner_readiness_check()
+    checks.append({
+        "name": "attachment_scanner",
+        "ok": scanner_ok,
+        "message": (
+            "scanner command configured"
+            if scanner_ok and scanner_required
+            else "scanner is not required in this environment"
+            if scanner_ok
+            else "scanner command unavailable"
+        ),
+    })
+
+    ready = database_ok and cache_ok and scheduler_ok and scanner_ok
     overall = "ready" if ready else "unavailable"
     status_code = 200 if ready else 503
     return JsonResponse({

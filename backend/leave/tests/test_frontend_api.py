@@ -1,5 +1,6 @@
 import datetime as dt
 import json
+import sys
 import tempfile
 from decimal import Decimal
 
@@ -990,7 +991,15 @@ class FrontendApiTests(TestCase):
             working_days=Decimal("1"), status="PENDING",
         )
         with tempfile.TemporaryDirectory() as attachment_root:
-            with override_settings(ZSH_ATTACHMENT_ROOT=attachment_root):
+            with override_settings(
+                ZSH_ATTACHMENT_ROOT=attachment_root,
+                ZSH_ATTACHMENT_SCANNER="",
+                ZSH_ATTACHMENT_SCANNER_COMMAND=[
+                    sys.executable,
+                    "-c",
+                    "print('{\"status\":\"clean\"}')",
+                ],
+            ):
                 upload = SimpleUploadedFile(
                     "evidence.pdf", valid_pdf(),
                     content_type="application/pdf",

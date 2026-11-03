@@ -6,7 +6,7 @@ from decimal import Decimal, InvalidOperation
 from uuid import uuid4
 
 from django.contrib.auth import get_user_model
-from django.core.exceptions import PermissionDenied, ValidationError
+from django.core.exceptions import PermissionDenied, SuspiciousFileOperation, ValidationError
 from django.core.files.base import ContentFile
 from django.db import IntegrityError, transaction
 from django.db.models import CharField, Count, ProtectedError, Q
@@ -22,10 +22,10 @@ from . import admin_services
 from . import audit_services
 from . import bradford_services
 from .attachment_security import (
-    AttachmentScannerUnavailable,
     InvalidAttachment,
     validate_attachment,
 )
+from .attachment_scanning import scan_stored_attachment
 from .authorization import (
     MANAGE_GLOBAL_LEAVE_TYPES, authorization_context, has_permission, hr_operation_employees,
     scoped_employees, scoped_hr_employees, scoped_hr_leave_requests,
@@ -1378,23 +1378,20 @@ def request_attachments(request, request_id: int):
         validated = validate_attachment(upload)
     except InvalidAttachment:
         return _failure("invalid_attachment", "فایل معتبر یا مجاز نیست", 400)
-    except AttachmentScannerUnavailable:
-        logger.error("Configured attachment malware scanner is unavailable.")
-        return _failure("attachment_scanner_unavailable", "بررسی امنیتی فایل در دسترس نیست", 503)
 
     attachment = LeaveRequestAttachment(
         request=row,
         file_name=validated.filename,
         content_type=validated.content_type,
         file_size=len(validated.content),
-        scan_status=validated.scan_status,
+        scan_status=LeaveRequestAttachment.SCAN_PENDING,
         uploaded_by=request.user,
     )
     storage = attachment.file.storage
     requested_storage_name = attachment_upload_path(attachment, validated.filename)
     try:
         stored_name = storage.save(requested_storage_name, ContentFile(validated.content))
-    except OSError:
+    except (OSError, SuspiciousFileOperation):
         logger.error("Private attachment storage write failed.")
         return _failure("attachment_storage_unavailable", "ذخیره فایل در دسترس نیست", 503)
 
@@ -1411,17 +1408,21 @@ def request_attachments(request, request_id: int):
     except Exception:
         try:
             storage.delete(stored_name)
-        except OSError:
+        except (OSError, SuspiciousFileOperation):
             logger.error("Failed to clean up an orphaned private attachment.")
         raise
 
+    attachment = scan_stored_attachment(attachment.pk, actor=request.user)
+    response_status = (
+        201 if attachment.scan_status == LeaveRequestAttachment.SCAN_CLEAN else 202
+    )
     return Response({
         "id": attachment.pk, "fileName": attachment.file_name,
         "sizeLabel": f"{max(1, round(attachment.file_size / 1024))} KB",
         "createdAt": attachment.created_at.isoformat(),
         "scanStatus": attachment.scan_status,
         "downloadUrl": f"/api/v1/leave-requests/{request_id}/attachments/{attachment.pk}/",
-    }, status=201)
+    }, status=response_status)
 
 
 @rate_limited("file_access")
@@ -1441,6 +1442,7 @@ def request_attachment_download(request, request_id: int, attachment_id: int):
     attachment = row.attachments.filter(
         pk=attachment_id,
         deletion_status=LeaveRequestAttachment.DELETION_ACTIVE,
+        scan_status=LeaveRequestAttachment.SCAN_CLEAN,
     ).first()
     if attachment is None:
         raise Http404
@@ -1448,18 +1450,20 @@ def request_attachment_download(request, request_id: int, attachment_id: int):
         if not attachment.file.storage.exists(attachment.file.name):
             raise Http404
         file_handle = attachment.file.open("rb")
-    except FileNotFoundError as exc:
+    except (FileNotFoundError, SuspiciousFileOperation) as exc:
         raise Http404 from exc
     except OSError:
         logger.error("Private attachment storage read failed.")
         return _failure("attachment_storage_unavailable", "خواندن فایل در دسترس نیست", 503)
     response = FileResponse(
         file_handle, as_attachment=True, filename=attachment.file_name,
-        content_type=attachment.content_type,
+        content_type="application/octet-stream",
     )
     response["Cache-Control"] = "private, no-store"
     response["Pragma"] = "no-cache"
     response["X-Content-Type-Options"] = "nosniff"
+    response["X-Frame-Options"] = "DENY"
+    response["Content-Security-Policy"] = "sandbox; default-src 'none'"
     return response
 
 

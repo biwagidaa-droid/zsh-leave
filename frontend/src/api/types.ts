@@ -80,6 +80,7 @@ export type Attachment = {
   fileName: string;
   sizeLabel: string;
   createdAt: string;
+  scanStatus?: "pending_scan" | "scanning" | "clean" | "rejected" | "scanner_unavailable" | "scan_failed" | "deleted";
   downloadUrl?: string;
 };
 
