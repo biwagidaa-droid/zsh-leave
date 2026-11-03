@@ -31,6 +31,7 @@ export function ActivateAccountPage() {
     setError("");
     try {
       await api.activateAccount(token, email.trim(), password);
+      setToken(null);
       setPassword("");
       setConfirmation("");
       setSuccess(true);
