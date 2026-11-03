@@ -1,21 +1,57 @@
 from __future__ import annotations
 
 import datetime as dt
+import logging
+import uuid
 
 from django.conf import settings
+from django.core.cache import cache
 from django.db import connection
 from django.http import JsonResponse
 from django.utils import timezone
-from rest_framework.decorators import api_view, permission_classes
+from rest_framework.decorators import api_view, permission_classes, throttle_classes
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 
 from .job_services import scheduler_state
 from zsh_core import jalali
 
+logger = logging.getLogger("leave")
+
+
+def _cache_readiness_check():
+    key = f"readiness:{uuid.uuid4().hex}"
+    value = uuid.uuid4().hex
+    missing = object()
+    failure = None
+
+    try:
+        cache.set(key, value, timeout=30)
+        if cache.get(key, missing) != value:
+            raise RuntimeError("Cache probe value could not be read.")
+        cache.delete(key)
+        if cache.get(key, missing) is not missing:
+            raise RuntimeError("Cache probe value was not deleted.")
+    except Exception as exc:  # Readiness must report backend failures as not ready.
+        failure = exc
+    finally:
+        try:
+            cache.delete(key)
+        except Exception as exc:  # A failed cleanup also means the cache is unhealthy.
+            failure = failure or exc
+
+    if failure:
+        logger.warning(
+            "event=readiness_cache_check_failed error_type=%s",
+            type(failure).__name__,
+        )
+        return False
+    return True
+
 
 @api_view(["GET"])
 @permission_classes([AllowAny])
+@throttle_classes([])
 def health_check(request):
     return JsonResponse({
         "status": "ok",
@@ -26,6 +62,7 @@ def health_check(request):
 
 @api_view(["GET"])
 @permission_classes([AllowAny])
+@throttle_classes([])
 def readiness_check(request):
     checks = []
     database_ok = False
@@ -38,6 +75,13 @@ def readiness_check(request):
         checks.append({"name": "database", "ok": False, "message": "database unavailable"})
     else:
         checks.append({"name": "database", "ok": True, "message": "database reachable"})
+
+    cache_ok = _cache_readiness_check()
+    checks.append({
+        "name": "cache",
+        "ok": cache_ok,
+        "message": "cache operations succeeded" if cache_ok else "cache unavailable",
+    })
 
     scheduler_required = settings.ZSH_JOB_SCHEDULER_REQUIRED or settings.ZSH_JOB_SCHEDULER_ENABLED
     scheduler_ok = True
@@ -58,7 +102,7 @@ def readiness_check(request):
             "message": "scheduler is not required in this environment",
         })
 
-    ready = database_ok and scheduler_ok
+    ready = database_ok and cache_ok and scheduler_ok
     overall = "ready" if ready else "unavailable"
     status_code = 200 if ready else 503
     return JsonResponse({

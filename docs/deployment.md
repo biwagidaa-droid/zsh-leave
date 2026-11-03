@@ -44,7 +44,29 @@ curl -sSI https://leave.example.test/api/v1/health/ -H 'Host: attacker.example'
 ## نصب
 این مخزن فرمان نصب وب/DB را ارائه نمی‌کند. پیش از تعریف deployment، مسئول عملیات باید image/runtime، WSGI server، proxy/TLS، روش secret injection، شبکهٔ خصوصی upstream، volume فایل‌ها، migration و rollback را انتخاب کند. `.env.example` یا دستورهای فرضی Compose در این مخزن مبنای اجرای production نیستند.
 
-پس از انتخاب runtime، پیکربندی امن email backend برای دعوت و اعلان‌های صف‌شده لازم است؛ متغیرها و وضعیت‌ها در [چرخه عمر حساب کارمند](./account-lifecycle-fa.md) و [سیاست اعلان‌ها](./notifications-fa.md) آمده‌اند. جدول cache مشترک باید با `DJANGO_SETTINGS_MODULE=config.settings_prod python manage.py createcachetable zsh_cache` ایجاد شود.
+پس از انتخاب runtime، پیکربندی امن email backend برای دعوت و اعلان‌های صف‌شده لازم است؛ متغیرها و وضعیت‌ها در [چرخه عمر حساب کارمند](./account-lifecycle-fa.md) و [سیاست اعلان‌ها](./notifications-fa.md) آمده‌اند.
+
+### مرحلهٔ release برای PostgreSQL و cache مشترک
+
+این مخزن Docker/Compose یا unit وب ندارد؛ unit زیر مسیر release نمونهٔ رسمی systemd است. آن را کنار unit سرویس برنامه نصب کنید. فایل environment باید همان متغیرهای production از جمله `ZSH_SECRET_KEY`، `ZSH_DB_*`، `ZSH_ALLOWED_HOSTS` و `ZSH_ATTACHMENT_ROOT` را داشته باشد و فقط برای root و گروه سرویس قابل‌خواندن باشد.
+
+کاربر اجرایی هر دو مرحلهٔ Migration و Provisioning، کاربر سیستم‌عامل `zsh-leave` است؛ این فرایند از همان فایل environment و virtualenv سرویس jobs استفاده می‌کند. در هر release، قبل از شروع یا فعال‌کردن Web Workerها اجرا کنید:
+
+```sh
+sudo install -o root -g root -m 0644 deploy/systemd/zsh-leave-release.service /etc/systemd/system/zsh-leave-release.service
+sudo systemctl daemon-reload
+sudo systemctl start zsh-leave-release.service
+sudo systemctl --no-pager --full status zsh-leave-release.service
+```
+
+unit به‌ترتیب `migrate --noinput` و `provision_cache_table` را با `config.settings_prod` اجرا می‌کند. اگر اتصال DB یا ساخت جدول شکست بخورد، unit ناموفق می‌شود؛ Web Workerها را تا موفقیت آن شروع نکنید. فرمان Provisioning مستقل و idempotent است و PostgreSQL advisory lock می‌گیرد؛ آن را فقط به‌عنوان مرحلهٔ release یک‌باره اجرا کنید، نه از entrypoint هر Web Worker. هنگام استفاده از release runner دیگری، همان ترتیب را با همان کاربر سیستم‌عامل سرویس و همان محیط production اجرا کنید:
+
+```sh
+python manage.py migrate --noinput --settings=config.settings_prod
+python manage.py provision_cache_table --settings=config.settings_prod
+```
+
+پس از بالا آمدن وب، `GET /api/v1/ready/` باید `200` و checkهای `database`، `cache` و (در production) `scheduler` را موفق گزارش کند؛ در غیر این صورت `503` می‌دهد. برای عیب‌یابی، لاگ unit را با `sudo journalctl -u zsh-leave-release.service --no-pager` ببینید، اتصال DB و مجوز `CREATE` کاربر دیتابیس را بررسی کنید و فرمان `provision_cache_table` را دوباره اجرا کنید. readiness از کلید تصادفی کوتاه‌عمر برای آزمون set/get/delete استفاده می‌کند؛ کلید عملیات را لمس نمی‌کند.
 
 برای اجرای کارهای زمان‌بندی‌شده، unit و timer systemd و شرط‌های readiness در [راهنمای عملیات پس‌زمینه](./background-jobs-fa.md) را دقیقاً نصب و فعال کنید. بدون این پیکربندی، Jobs API زمان‌بند را پیکربندی‌نشده اعلام می‌کند و readiness production موفق نمی‌شود.
 

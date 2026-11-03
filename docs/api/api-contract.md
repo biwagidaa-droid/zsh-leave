@@ -25,13 +25,15 @@ This contract reflects the current state of the actual backend and frontend inte
 ### `GET /api/v1/ready/`
 - Status: Implemented
 - Permission: AllowAny
-- Response: JSON readiness object with database check
+- Response: JSON readiness object with database, cache, and optional scheduler checks. The cache check performs a short-lived set/get/delete probe.
 - Success body example:
   ```json
   {
     "status": "ready",
     "checks": [
-      {"name": "database", "ok": true, "message": "database reachable"}
+      {"name": "database", "ok": true, "message": "database reachable"},
+      {"name": "cache", "ok": true, "message": "cache operations succeeded"},
+      {"name": "scheduler", "ok": true, "status": "not_required", "message": "scheduler is not required in this environment"}
     ],
     "timestamp": "2026-11-01T00:00:00+00:00"
   }
