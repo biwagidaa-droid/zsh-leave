@@ -1,5 +1,13 @@
 # گزارش آزمون
 
+## اجرای F-04 — سیاست چندنقشی Union (۳ نوامبر ۲۰۲۶)
+
+- `cd backend && DJANGO_SETTINGS_MODULE=config.settings_test python manage.py test leave.tests.test_multirole_policy_api leave.tests.test_frontend_api leave.tests.test_exports leave.tests.test_attachment_security` — **۶۵ تست موفق** روی SQLite. شامل API واقعی با Session/CSRF، ترکیب HR+Manager، scope شرکت، ثبت درخواست برای direct report خارج از HR assignment، Read/Write/Export/Download، انقضای RoleAssignment، محرمانگی، پیوست و export.
+- `makemigrations --check --dry-run` — بدون migration جاافتاده؛ `manage.py check` — بدون مشکل. `git diff --check` موفق.
+- SQLite شواهد PostgreSQL نیست؛ اجرای مجدد Migration و تست‌های F-04 روی PostgreSQL **NOT VERIFIED** است.
+- اجرای گسترده‌تر شامل کل `test_workflow_api` و `test_calendar` با چند تست قدیمیِ دارای تاریخ ثابت `2026-11-02` پس از آن تاریخ شکست خورد؛ آزمون‌های موجود وابسته به تاریخ جاری‌اند. این تست‌ها برای F-04 تغییر نکردند. تست جدید ثبت درخواست با تاریخ آینده و سیاست تقویم تنظیم‌شده موفق است.
+- اجرای کامل `DJANGO_SETTINGS_MODULE=config.settings_test python manage.py test --verbosity 1` — **۴۰۰ تست اجرا شد؛ ۱۶ skip، ۳ failure و ۶ error**. خطاهای workflow/calendar از تاریخ‌های ثابت گذشتهٔ `2026-11-02`، تست‌های production settings از نبود scanner command اجباری در محیط تست، و یک انتظار قدیمی Upload (`201` در برابر پاسخ جاری `202`) بودند؛ مجموعهٔ متمرکز F-04 در اجرای جداگانه ۶۵/۶۵ موفق شد.
+
 ## سخت‌سازی اسکن و دانلود پیوست‌های HR (۳ نوامبر ۲۰۲۶)
 
 - تست‌های `leave.tests.test_attachment_security`، `CacheReadinessTests` و تست API مجاز دانلود — **۲۵ تست موفق** در SQLite؛ شامل clean-only download، scope مالک/HR، file missing/deleted/symlink، parser/MIME/size/path traversal، جلوگیری از نوشتن از مسیر symlink، scanner unavailable/reject/accept/timeout/crash/nonzero/invalid JSON/خروجی بزرگ، retry idempotent، Audit و purge.

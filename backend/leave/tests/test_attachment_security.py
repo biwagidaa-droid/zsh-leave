@@ -311,7 +311,7 @@ class AttachmentSecurityTests(TestCase):
         )
         self.assertEqual(self.client.get(url).status_code, 200)
 
-    def test_manager_cannot_download_employee_attachment(self):
+    def test_manager_can_download_nonconfidential_direct_report_attachment(self):
         manager_user = get_user_model().objects.create_user(username="attachment-manager")
         manager = EmployeeProfile.objects.create(
             user=manager_user, company=self.company, personnel_code="ATT-A-M",
@@ -328,7 +328,7 @@ class AttachmentSecurityTests(TestCase):
             f"/api/v1/leave-requests/{self.request.pk}/attachments/{attachment.pk}/",
         )
 
-        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.status_code, 200)
 
     def test_missing_storage_object_returns_not_found_without_disclosing_path(self):
         attachment = self.upload_successfully()

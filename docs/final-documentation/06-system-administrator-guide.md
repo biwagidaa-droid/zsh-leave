@@ -32,8 +32,8 @@ DJANGO_SETTINGS_MODULE=config.settings_test python3 manage.py test
 ## مدیریت کاربر، نقش و سازمان
 
 - کاربران Django و EmployeeProfile به‌صورت جداگانه مدیریت می‌شوند. UI مدیریت employee هنگام ایجاد حساب، نام کاربری تولید و password unusable می‌گذارد؛ provisioning/login امن برای آن باید سازمانی تعریف شود. در `authorization_context`، `end_date` به‌تنهایی نقش employee را نمی‌بندد؛ خاتمه دسترسی باید با غیرفعال‌سازی حساب یا `is_employee=False` نیز همراه باشد.
-- نقش‌ها در `RoleAssignment` هستند: admin-global؛ HR شرکت/سایت/واحد/کارمند؛ exec شرکت/سایت/واحد. manager از رابطه مستقیم EmployeeProfile به دست می‌آید.
-- endpoint admin نقش‌ها `/api/v1/admin/role-assignments/` و جزئیات DELETE دارد؛ UI/متد frontend وجود ندارد. اعطای نقش به خود ممنوع، grant/revoke ممیزی و لغو آخرین admin برای actor غیر-superuser ممنوع است.
+- نقش‌ها در `RoleAssignment` هستند: admin-global؛ HR شرکت/سایت/واحد/کارمند؛ exec شرکت/سایت/واحد. manager از رابطه مستقیم EmployeeProfile به دست می‌آید. RoleAssignment می‌تواند `expiresAt` آینده و timezone-aware داشته باشد؛ غیرفعال/منقضی هیچ scope مؤثری ندارد.
+- endpoint admin نقش‌ها `/api/v1/admin/role-assignments/` و جزئیات DELETE دارد؛ UI/متد frontend وجود ندارد. اعطای نقش به خود ممنوع، grant/revoke/انقضا ممیزی و لغو آخرین admin مؤثر برای actor غیر-superuser ممنوع است. سیاست ترکیب چندنقشی در [سیاست مجوزدهی](../authorization-policy.md) آمده است.
 - company/department از UI سازمانی مدیریت‌پذیر است؛ سایت‌مدیریت UI جدا ندارد. رکوردها را فقط در سازمان/داده واقعی پس از اعتبارسنجی مرجع بسازید.
 
 ## امنیت، نشست و تنظیمات کسب‌وکار

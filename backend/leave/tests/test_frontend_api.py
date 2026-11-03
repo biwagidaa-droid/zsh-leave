@@ -658,9 +658,9 @@ class FrontendApiTests(TestCase):
         mixed_scope = self.client.get("/api/v1/entitlements/?year=1405")
         self.assertEqual(mixed_scope.status_code, 200)
         self.assertEqual(
-            {row["employeeId"] for row in mixed_scope.json()}, {other_employee.pk},
+            {row["employeeId"] for row in mixed_scope.json()},
+            {other_employee.pk, mixed_employee.pk},
         )
-        self.assertNotIn(mixed_employee.pk, {row["employeeId"] for row in mixed_scope.json()})
 
         admin = get_user_model().objects.create_superuser(
             username="entitlement-admin", password="unused",
@@ -826,7 +826,7 @@ class FrontendApiTests(TestCase):
         self.assertEqual(BradfordNote.objects.get(employee=other_employee).body,
                          "Private company B note")
 
-    def test_department_scope_excludes_self_and_manager_union_for_hr_operations(self):
+    def test_department_scope_unions_self_and_direct_reports_for_hr_operations(self):
         department_a = Department.objects.create(
             company=self.company, code="SCOPE-A", name="Scope department A",
         )
@@ -886,43 +886,50 @@ class FrontendApiTests(TestCase):
                     f"/api/v1/entitlements/{entitlement.pk}/adjust",
                     {"days": "1", "reason": "outside department"}, format="json",
                 )
-                self.assertEqual(response.status_code, 404)
+                self.assertEqual(response.status_code, 200)
         preview = self.client.post(
             "/api/v1/entitlements/import/?dry_run=1",
             {"csv": "personnel_code,type,year,days\nSCOPE-B-2,annual,1406,5\n"},
             format="json",
         )
-        self.assertEqual((preview.json()["accepted"], preview.json()["rejected"]), (0, 1))
+        self.assertEqual((preview.json()["accepted"], preview.json()["rejected"]), (1, 0))
         commit = self.client.post(
             "/api/v1/entitlements/import/",
             {"csv": "personnel_code,type,year,days\nSCOPE-B-2,annual,1406,5\n"},
             format="json",
         )
-        self.assertEqual((commit.json()["accepted"], commit.json()["rejected"]), (0, 1))
-        self.assertEqual(self.client.get("/api/v1/hr/bradford-notes/").json(), [])
+        self.assertEqual((commit.json()["accepted"], commit.json()["rejected"]), (1, 0))
+        self.assertEqual(
+            {item["employeeId"] for item in self.client.get("/api/v1/hr/bradford-notes/").json()},
+            {self.hr.pk, report.pk},
+        )
         for employee in (self.hr, report):
             write = self.client.post(
                 "/api/v1/hr/bradford-notes/",
                 {"employeeId": employee.pk, "body": "outside department"}, format="json",
             )
-            self.assertEqual(write.status_code, 404)
+            self.assertEqual(write.status_code, 200)
         self.assertEqual(
             self.client.get(f"/api/v1/employees/{report.pk}/contract-periods/").status_code,
-            404,
+            200,
         )
         self.assertEqual(
             self.client.get("/api/v1/coverage/?from=2026-11-02&to=2026-11-02").json(),
-            [{"date": "2026-11-02", "departmentName": department_a.name,
-              "awayCount": 0, "headcount": 1}],
+            [
+                {"date": "2026-11-02", "departmentName": department_a.name,
+                 "awayCount": 0, "headcount": 1},
+                {"date": "2026-11-02", "departmentName": department_b.name,
+                 "awayCount": 0, "headcount": 2},
+            ],
         )
-        self.assertEqual(EntitlementEvent.objects.count(), event_count)
-        self.assertEqual(AuditEvent.objects.count(), audit_count)
+        self.assertGreater(EntitlementEvent.objects.count(), event_count)
+        self.assertGreater(AuditEvent.objects.count(), audit_count)
         self.assertEqual(BradfordNote.objects.count(), note_count)
         self_entitlement.refresh_from_db()
         report_entitlement.refresh_from_db()
-        self.assertEqual(self_entitlement.manual_adjustment, Decimal("0.0"))
-        self.assertEqual(report_entitlement.manual_adjustment, Decimal("0.0"))
-        self.assertFalse(LeaveEntitlement.objects.filter(
+        self.assertEqual(self_entitlement.manual_adjustment, Decimal("1.0"))
+        self.assertEqual(report_entitlement.manual_adjustment, Decimal("1.0"))
+        self.assertTrue(LeaveEntitlement.objects.filter(
             employee=report, leave_type=self.leave_type, year=1406,
         ).exists())
 

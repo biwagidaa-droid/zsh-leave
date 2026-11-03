@@ -33,6 +33,7 @@ SNAPSHOT_FIELDS = {
         "userId": "user_id", "role": "role", "scope": "scope", "companyId": "company_id",
         "siteId": "site_id", "departmentId": "department_id", "employeeId": "employee_id",
         "isActive": "is_active", "createdById": "created_by_id", "revokedById": "revoked_by_id",
+        "expiresAt": "expires_at",
     },
     "WorkPattern": {
         "name": "name", "companyId": "company_id", "siteId": "site_id",

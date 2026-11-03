@@ -27,8 +27,9 @@ from .attachment_security import (
 )
 from .attachment_scanning import scan_stored_attachment
 from .authorization import (
-    MANAGE_GLOBAL_LEAVE_TYPES, authorization_context, has_permission, hr_operation_employees,
-    scoped_employees, scoped_hr_employees, scoped_hr_leave_requests,
+    MANAGE_GLOBAL_LEAVE_TYPES, authorization_context, can_access_request_attachments,
+    has_permission, hr_operation_employees, scoped_employees, scoped_hr_employees,
+    scoped_exec_employees, scoped_hr_leave_requests, scoped_leave_requests,
 )
 from .entitlement_services import (
     EntitlementConflict,
@@ -277,7 +278,7 @@ def entitlements(request):
         year = int(request.query_params.get("year", ""))
     except ValueError:
         return _failure("invalid_year", "سال معتبر نیست", 400)
-    employee_ids = scoped_hr_employees(context).values("pk")
+    employee_ids = hr_operation_employees(context).values("pk")
     rows = LeaveEntitlement.objects.select_related(
         "employee__user", "employee__company", "employee__site", "employee__department", "leave_type",
     ).filter(employee_id__in=employee_ids, year=year).order_by(
@@ -450,22 +451,43 @@ def employees(request, employee_id: int | None = None):
         return _failure("invalid_payload", "نام و کد پرسنلی باید متن باشند", 400)
     try:
         company = Company.objects.get(pk=data["companyId"])
-        department_id = int(data["departmentId"]) if data.get("departmentId") else None
-        department = Department.objects.get(pk=data["departmentId"]) if data.get("departmentId") else None
+        department_id = (
+            int(data["departmentId"]) if data.get("departmentId")
+            else employee.department_id if employee is not None and "departmentId" not in data
+            else None
+        )
+        department = (
+            Department.objects.get(pk=department_id) if department_id is not None else None
+        )
         if data.get("siteId") is not None:
             if isinstance(data["siteId"], bool):
                 raise ValueError("siteId باید شناسه معتبر باشد")
             site = OrganizationSite.objects.get(pk=int(data["siteId"]))
         else:
             site = employee.site if employee is not None and "siteId" not in data else None
-        if not _admin(context) and not context.has_scope(
+        manager_id = data.get(
+            "managerId", employee.manager_id if employee is not None else None,
+        )
+        if manager_id is not None:
+            if isinstance(manager_id, bool):
+                raise ValueError("managerId باید شناسه معتبر باشد")
+            manager_id = int(manager_id)
+        hr_destination_scope = context.has_scope(
             "hr", company_id=company.pk, site_id=site.pk if site else None,
-            department_id=department_id, employee_id=None,
+            department_id=department_id, employee_id=employee.pk if employee else None,
+        )
+        manager_destination_scope = bool(
+            context.employee_id is not None
+            and company.pk == context.employee.company_id
+            and manager_id == context.employee_id
+        )
+        if not _admin(context) and not (
+            hr_destination_scope or manager_destination_scope
         ):
             return _failure("permission_denied", "ثبت در این شرکت یا محدوده سازمانی مجاز نیست", 403)
         manager = (
-            hr_operation_employees(context).get(pk=data["managerId"])
-            if data.get("managerId") else None
+            hr_operation_employees(context).get(pk=manager_id)
+            if manager_id else None
         )
         start = dt.date.fromisoformat(data["startDate"]) if data.get("startDate") else (
             employee.start_date if employee else organization_localdate()
@@ -973,16 +995,18 @@ def coverage(request):
     except (KeyError, ValueError):
         return _failure("invalid_range", "بازه تاریخ معتبر و حداکثر ۹۳ روز باشد", 400)
     if context.has_role("hr"):
-        eligible = scoped_hr_leave_requests(context)
-        employee_rows = hr_operation_employees(context)
+        eligible = scoped_leave_requests(context)
+        employee_rows = scoped_employees(context)
     elif context.employee_id:
         eligible = LeaveRequest.objects.filter(manager_snapshot_id=context.employee_id)
         employee_rows = EmployeeProfile.objects.filter(manager_id=context.employee_id)
     else:
         return _failure("permission_denied", "دامنه گزارش پوشش مشخص نیست", 403)
     approved = eligible.filter(status="APPROVED", start_date__lte=end, end_date__gte=start)
-    if not context.has_role("hr"):
-        approved = approved.filter(leave_type__confidential=False)
+    hr_request_ids = scoped_hr_leave_requests(context).values("pk")
+    approved = approved.filter(
+        Q(leave_type__confidential=False) | Q(pk__in=hr_request_ids),
+    )
     department_ids = employee_rows.values_list("department_id", flat=True)
     departments = Department.objects.filter(pk__in=department_ids).distinct()
     population = list(
@@ -1049,7 +1073,7 @@ def _bradford_scope(context) -> list[dict]:
             "companyId": "company_id", "employeeId": "employee_id",
         },
     }
-    return [
+    result = [
         {
             "type": assignment.scope,
             **{
@@ -1060,6 +1084,19 @@ def _bradford_scope(context) -> list[dict]:
         for assignment in context.assignments
         if assignment.role == "hr"
     ]
+    if context.employee_id is not None:
+        result.append({
+            "type": "self",
+            "companyId": context.employee.company_id,
+            "employeeId": context.employee_id,
+        })
+        if context.has_role("manager"):
+            result.append({
+                "type": "manager_team",
+                "companyId": context.employee.company_id,
+                "managerEmployeeId": context.employee_id,
+            })
+    return result
 
 
 def _bradford_report(request, context) -> Response:
@@ -1113,7 +1150,7 @@ def _bradford_report(request, context) -> Response:
     }
     try:
         result = bradford_services.calculate_bradford_report(
-            employees=scoped_hr_employees(context),
+            employees=scoped_employees(context),
             start=start,
             end=end,
             offset=offset,
@@ -1164,18 +1201,10 @@ def _report_response(request, context, kind: str) -> Response:
     if kind not in {"absences", "balances", "trends", "process-health"}:
         return _failure("unknown_report", "نوع گزارش شناخته‌شده نیست", 404)
     if context.has_role("hr"):
-        rows = scoped_hr_leave_requests(context)
-        people = hr_operation_employees(context)
+        rows = scoped_leave_requests(context)
+        people = scoped_employees(context)
     else:
-        employee_scope = Q()
-        for assignment in RoleAssignment.objects.filter(user=request.user, role="exec", is_active=True):
-            if assignment.scope == RoleAssignment.SCOPE_COMPANY:
-                employee_scope |= Q(company_id=assignment.company_id)
-            elif assignment.scope == RoleAssignment.SCOPE_SITE:
-                employee_scope |= Q(company_id=assignment.company_id, site_id=assignment.site_id)
-            elif assignment.scope == RoleAssignment.SCOPE_DEPARTMENT:
-                employee_scope |= Q(company_id=assignment.company_id, department_id=assignment.department_id)
-        people = EmployeeProfile.objects.filter(employee_scope, is_employee=True)
+        people = scoped_exec_employees(context)
         rows = LeaveRequest.objects.filter(employee_id__in=people.values("pk"))
     people = employees_employed_on(people, organization_localdate())
     try:
@@ -1185,7 +1214,12 @@ def _report_response(request, context, kind: str) -> Response:
     except settings_schema.SettingError as exc:
         return _failure("invalid_settings", str(exc), 409)
     report_rows = rows.filter(employee_id__in=people.values("pk"))
-    if not context.has_role("hr"):
+    if context.has_role("hr"):
+        hr_request_ids = scoped_hr_leave_requests(context).values("pk")
+        report_rows = report_rows.filter(
+            Q(leave_type__confidential=False) | Q(pk__in=hr_request_ids),
+        )
+    else:
         report_rows = report_rows.filter(leave_type__confidential=False)
     approved = report_rows.filter(status="APPROVED")
     if kind == "absences":
@@ -1348,16 +1382,14 @@ def contracts(request, employee_id: int):
 @rate_limited("file_upload")
 @api_view(["GET", "POST"])
 def request_attachments(request, request_id: int):
-    from .workflow_views import _comment_allowed, _hr_for, _visible_request
+    from .workflow_views import _visible_request
 
     context = _context(request)
     try:
         row = _visible_request(request_id, context)
     except LeaveRequest.DoesNotExist as exc:
         raise Http404 from exc
-    if (
-        context.employee_id != row.employee_id and not _hr_for(context, row)
-    ) or not _comment_allowed(context, row):
+    if not can_access_request_attachments(context, row):
         return _failure("permission_denied", "دسترسی به پیوست این درخواست مجاز نیست", 403)
     if request.method == "GET":
         return Response([{
@@ -1428,16 +1460,14 @@ def request_attachments(request, request_id: int):
 @rate_limited("file_access")
 @api_view(["GET"])
 def request_attachment_download(request, request_id: int, attachment_id: int):
-    from .workflow_views import _comment_allowed, _hr_for, _visible_request
+    from .workflow_views import _visible_request
 
     context = _context(request)
     try:
         row = _visible_request(request_id, context)
     except LeaveRequest.DoesNotExist as exc:
         raise Http404 from exc
-    if (
-        context.employee_id != row.employee_id and not _hr_for(context, row)
-    ) or not _comment_allowed(context, row):
+    if not can_access_request_attachments(context, row):
         return _failure("permission_denied", "دسترسی به پیوست این درخواست مجاز نیست", 403)
     attachment = row.attachments.filter(
         pk=attachment_id,
