@@ -59,14 +59,19 @@ sudo systemctl start zsh-leave-release.service
 sudo systemctl --no-pager --full status zsh-leave-release.service
 ```
 
-unit به‌ترتیب `migrate --noinput` و `provision_cache_table` را با `config.settings_prod` اجرا می‌کند. اگر اتصال DB یا ساخت جدول شکست بخورد، unit ناموفق می‌شود؛ Web Workerها را تا موفقیت آن شروع نکنید. فرمان Provisioning مستقل و idempotent است و PostgreSQL advisory lock می‌گیرد؛ آن را فقط به‌عنوان مرحلهٔ release یک‌باره اجرا کنید، نه از entrypoint هر Web Worker. هنگام استفاده از release runner دیگری، همان ترتیب را با همان کاربر سیستم‌عامل سرویس و همان محیط production اجرا کنید:
+unit به‌ترتیب `migrate --noinput`، `provision_cache_table` و همگام‌سازی Grantها را با `config.settings_prod` اجرا می‌کند. اگر اتصال DB، ساخت جدول یا تنظیم ACL شکست بخورد، unit ناموفق می‌شود؛ Web Workerها را تا موفقیت آن شروع نکنید. فرمان Provisioning مستقل و idempotent است و PostgreSQL advisory lock می‌گیرد؛ آن را فقط به‌عنوان مرحلهٔ release یک‌باره اجرا کنید، نه از entrypoint هر Web Worker. هنگام استفاده از release runner دیگری، همان ترتیب را با همان کاربر سیستم‌عامل سرویس و همان محیط production اجرا کنید:
 
 ```sh
 python manage.py migrate --noinput --settings=config.settings_prod
 python manage.py provision_cache_table --settings=config.settings_prod
+python manage.py sync_runtime_db_grants --settings=config.settings_prod
 ```
 
-پس از بالا آمدن وب، `GET /api/v1/ready/` باید `200` و checkهای `database`، `cache` و (در production) `scheduler` را موفق گزارش کند؛ در غیر این صورت `503` می‌دهد. برای عیب‌یابی، لاگ unit را با `sudo journalctl -u zsh-leave-release.service --no-pager` ببینید، اتصال DB و مجوز `CREATE` کاربر دیتابیس را بررسی کنید و فرمان `provision_cache_table` را دوباره اجرا کنید. readiness از کلید تصادفی کوتاه‌عمر برای آزمون set/get/delete استفاده می‌کند؛ کلید عملیات را لمس نمی‌کند.
+### نقش‌های PostgreSQL و append-only
+
+پیش از migration، نقش‌ها و مالکیت را مطابق [Runbook نقش‌ها و تاریخچهٔ PostgreSQL](./postgresql-role-security-fa.md) با DBA تنظیم کنید. release unit از فایل جداگانهٔ `/etc/zsh-leave/zsh-leave-migrate.env` استفاده می‌کند: `ZSH_DB_USER=zsh_migrator`، رمز migration از secret manager، و `PGOPTIONS="-c role=zsh_schema_owner"`. این عضویت فقط اجازهٔ `SET ROLE` می‌دهد، نه ارث‌بری؛ نقش `zsh_app` در فایل محیطی Web/Jobs باید جداگانه تنظیم شود و هیچ عضویتی در نقش مالک نداشته باشد. پس از migration، unit جدول cache را provision و با `sync_runtime_db_grants` مجوزهای runtime/backup را همگام می‌کند؛ هر سه مرحله باید موفق باشند، وگرنه انتشار را متوقف کنید.
+
+پس از بالا آمدن وب، `GET /api/v1/ready/` باید `200` و checkهای `database`، `cache` و (در production) `scheduler` را موفق گزارش کند؛ در غیر این صورت `503` می‌دهد. برای عیب‌یابی، لاگ unit را با `sudo journalctl -u zsh-leave-release.service --no-pager` ببینید، اتصال و نقش/مالکیت release را بررسی کنید و در صورت شکست provisioning، unit را پس از رفع خطا دوباره اجرا کنید. readiness از کلید تصادفی کوتاه‌عمر برای آزمون set/get/delete استفاده می‌کند؛ کلید عملیات را لمس نمی‌کند.
 
 برای اجرای کارهای زمان‌بندی‌شده، unit و timer systemd و شرط‌های readiness در [راهنمای عملیات پس‌زمینه](./background-jobs-fa.md) را دقیقاً نصب و فعال کنید. بدون این پیکربندی، Jobs API زمان‌بند را پیکربندی‌نشده اعلام می‌کند و readiness production موفق نمی‌شود.
 

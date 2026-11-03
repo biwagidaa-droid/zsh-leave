@@ -1000,7 +1000,7 @@ class JobExecution(models.Model):
         ]
 
 
-class JobEffect(models.Model):
+class JobEffect(_AppendOnly):
     job_name = models.CharField(max_length=64)
     effect_key = models.CharField(max_length=255, unique=True)
     created_at = models.DateTimeField(auto_now_add=True)
