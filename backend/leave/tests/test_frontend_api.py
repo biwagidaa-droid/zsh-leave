@@ -75,6 +75,7 @@ class FrontendApiTests(TestCase):
             "/api/v1/auth/logout": "auth-logout",
             "/api/v1/auth/me": "auth-me",
             "/api/v1/auth/password": "auth-password",
+            "/api/v1/auth/activate": "auth-activate",
             "/api/v1/leave-types/": "leave-types",
             "/api/v1/leave-types/1/": "leave-type-detail",
             "/api/v1/leave-requests/": "leave-requests",
@@ -96,6 +97,9 @@ class FrontendApiTests(TestCase):
             "/api/v1/notifications/1/read": "notification-read",
             "/api/v1/employees/": "employees",
             "/api/v1/employees/1/": "employee-detail",
+            "/api/v1/employees/1/invitation/": "employee-invitation",
+            "/api/v1/employees/1/invitation/revoke": "employee-invitation-revoke",
+            "/api/v1/employees/1/suspend": "employee-account-suspend",
             "/api/v1/employees/1/contract-periods/": "employee-contracts",
             "/api/v1/companies/": "companies",
             "/api/v1/companies/1/": "company-detail",
@@ -479,7 +483,11 @@ class FrontendApiTests(TestCase):
     def test_coverage_uses_audited_status_as_of_each_historical_day(self):
         today = organization_localdate()
         yesterday = today - dt.timedelta(days=1)
-        suspend_employee(employee_id=self.employee.pk, actor=self.hr_user)
+        suspend_employee(
+            employee_id=self.employee.pk,
+            actor=self.hr_user,
+            reason="Test suspension",
+        )
 
         response = self.client.get(
             f"/api/v1/coverage/?from={yesterday.isoformat()}&to={today.isoformat()}",

@@ -132,17 +132,21 @@ def _can_manage_company_sites(context, company_id: int) -> bool:
     )
 
 
-def _employee_json(employee: EmployeeProfile) -> dict:
-    return {
+def _employee_json(employee: EmployeeProfile, *, include_contact: bool = False) -> dict:
+    result = {
         "id": employee.pk,
         "userId": employee.user_id,
         "displayName": employee.user.get_full_name().strip() or employee.user.get_username(),
+        "firstName": employee.user.first_name,
+        "lastName": employee.user.last_name,
         "personnelCode": employee.personnel_code,
         "companyId": employee.company_id,
         "companyName": employee.company.name,
         "siteId": employee.site_id,
         "siteName": employee.site.name if employee.site_id else None,
+        "departmentId": employee.department_id,
         "departmentName": employee.department.name if employee.department_id else "",
+        "managerId": employee.manager_id,
         "positionName": "",
         "managerName": (
             employee.manager.user.get_full_name().strip() or employee.manager.user.get_username()
@@ -153,6 +157,9 @@ def _employee_json(employee: EmployeeProfile) -> dict:
         "isActive": is_employed_on(employee),
         "accountStatus": employee.account_status,
     }
+    if include_contact:
+        result["email"] = employee.user.email
+    return result
 
 
 def _leave_type_json(item: LeaveType) -> dict:
@@ -416,14 +423,25 @@ def employees(request, employee_id: int | None = None):
             employee = rows.filter(pk=employee_id).first()
             if employee is None:
                 raise Http404
-            return Response(_employee_json(employee))
+            return Response(
+                _employee_json(
+                    employee,
+                    include_contact=context.has_role("hr") or _admin(context),
+                ),
+            )
         query = request.query_params.get("q", "").strip()
         if query:
             rows = rows.filter(
                 Q(user__first_name__icontains=query) | Q(user__last_name__icontains=query)
                 | Q(personnel_code__icontains=query) | Q(user__username__icontains=query),
             )
-        return Response([_employee_json(item) for item in rows.order_by("user__last_name", "user__first_name")])
+        return Response([
+            _employee_json(
+                item,
+                include_contact=context.has_role("hr") or _admin(context),
+            )
+            for item in rows.order_by("user__last_name", "user__first_name")
+        ])
     if not (context.has_role("hr") or _admin(context)):
         return _failure("permission_denied", "مدیریت پرونده کارکنان مجاز نیست", 403)
     data = request.data
@@ -434,11 +452,24 @@ def employees(request, employee_id: int | None = None):
     except EmployeeProfile.DoesNotExist:
         raise Http404
     allowed = {
-        "displayName", "personnelCode", "companyId", "siteId", "departmentId", "managerId",
-        "startDate", "endDate", "email",
+        "displayName", "firstName", "lastName", "personnelCode", "companyId", "siteId",
+        "departmentId", "managerId", "startDate", "endDate", "email",
     }
-    if set(data) - allowed or not {"displayName", "personnelCode", "companyId"}.issubset(data):
-        return _failure("invalid_payload", "نام، کد پرسنلی و شرکت الزامی است", 400)
+    has_display_name = isinstance(data.get("displayName"), str) and bool(data["displayName"].strip())
+    has_first_and_last = (
+        isinstance(data.get("firstName"), str) and bool(data["firstName"].strip())
+        and isinstance(data.get("lastName"), str) and bool(data["lastName"].strip())
+    )
+    if (
+        set(data) - allowed
+        or not {"personnelCode", "companyId"}.issubset(data)
+        or not (has_display_name or has_first_and_last)
+    ):
+        return _failure(
+            "invalid_payload",
+            "نام و نام خانوادگی یا نام کامل، کد پرسنلی و شرکت الزامی است",
+            400,
+        )
     if employee is not None and "email" in data:
         return _failure("invalid_payload", "برای تغییر ایمیل از فرایند دعوت استفاده کنید", 400)
     invitation_email = None
@@ -447,7 +478,14 @@ def employees(request, employee_id: int | None = None):
             invitation_email = normalize_email(data["email"])
         except InvitationError:
             return _failure("invalid_employee", "نشانی ایمیل معتبر نیست", 400)
-    if not isinstance(data["displayName"], str) or not isinstance(data["personnelCode"], str):
+        if User.objects.filter(email__iexact=invitation_email).exists():
+            return _failure("duplicate_email", "این ایمیل قبلاً برای حساب دیگری ثبت شده است", 409)
+    if (
+        ("displayName" in data and not isinstance(data["displayName"], str))
+        or ("firstName" in data and not isinstance(data["firstName"], str))
+        or ("lastName" in data and not isinstance(data["lastName"], str))
+        or not isinstance(data["personnelCode"], str)
+    ):
         return _failure("invalid_payload", "نام و کد پرسنلی باید متن باشند", 400)
     try:
         company = Company.objects.get(pk=data["companyId"])
@@ -485,6 +523,15 @@ def employees(request, employee_id: int | None = None):
             hr_destination_scope or manager_destination_scope
         ):
             return _failure("permission_denied", "ثبت در این شرکت یا محدوده سازمانی مجاز نیست", 403)
+        code = data["personnelCode"].strip()
+        duplicate_code = EmployeeProfile.objects.filter(
+            company=company,
+            personnel_code=code,
+        )
+        if employee is not None:
+            duplicate_code = duplicate_code.exclude(pk=employee.pk)
+        if duplicate_code.exists():
+            return _failure("duplicate_employee", "کد پرسنلی قبلاً در این شرکت ثبت شده است", 409)
         manager = (
             hr_operation_employees(context).get(pk=manager_id)
             if manager_id else None
@@ -495,10 +542,16 @@ def employees(request, employee_id: int | None = None):
         end = dt.date.fromisoformat(data["endDate"]) if data.get("endDate") else (
             employee.end_date if employee else None
         )
-        display_name = data["displayName"].strip()
-        code = data["personnelCode"].strip()
-        if not display_name or not code:
+        first_name = (
+            data["firstName"].strip() if isinstance(data.get("firstName"), str)
+            else data.get("displayName", "").strip()
+        )
+        last_name = data.get("lastName", "").strip() if isinstance(data.get("lastName"), str) else ""
+        display_name = data.get("displayName", "").strip() if isinstance(data.get("displayName"), str) else ""
+        if not first_name or not code:
             raise ValueError("نام و کد پرسنلی الزامی است")
+        if "firstName" in data and not last_name:
+            raise ValueError("نام خانوادگی الزامی است")
         created = employee is None
         with transaction.atomic():
             if employee is not None:
@@ -512,7 +565,8 @@ def employees(request, employee_id: int | None = None):
                     return _failure("duplicate_user", "حساب کاربری با این کد وجود دارد", 409)
                 user = User(
                     username=username,
-                    first_name=display_name,
+                    first_name=first_name,
+                    last_name=last_name,
                     email=invitation_email or "",
                     is_active=False,
                 )
@@ -524,9 +578,12 @@ def employees(request, employee_id: int | None = None):
                 )
             else:
                 user = employee.user
-                display_name_changed = user.first_name != display_name
-                user.first_name = display_name
-                user.save(update_fields=["first_name"])
+                display_name_changed = (
+                    user.first_name != first_name or user.last_name != last_name
+                )
+                user.first_name = first_name
+                user.last_name = last_name
+                user.save(update_fields=["first_name", "last_name"])
                 employee.company, employee.personnel_code = company, code
                 employee.start_date = start
             employee.site, employee.department, employee.manager, employee.end_date = (
@@ -574,7 +631,7 @@ def employees(request, employee_id: int | None = None):
         except InvitationError:
             return _failure("invitation_failed", "دعوت کاربر ایجاد نشد", 500)
         employee.refresh_from_db()
-    result = _employee_json(employee)
+    result = _employee_json(employee, include_contact=True)
     if invitation_result:
         result["invitationStatus"] = invitation_result.status
         result["invitationDelivery"] = (

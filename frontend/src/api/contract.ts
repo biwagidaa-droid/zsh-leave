@@ -2,7 +2,8 @@ import type { ClientPolicy } from "../lib/clientPolicy";
 import type {
   Attachment, AuditRow, Balance, BradfordNote, CalendarEvent, CalendarHolidayEvent, Comment, Company, ContractPeriod,
   CoverageRow, Department, Employee, Entitlement, Holiday, ImportPreview, JobRow,
-  LeaveRequest, LeaveType, NotificationItem, Page, ReportSummary, SettingItem, User,
+  EmployeeOnboardingDraft, EmployeeOnboardingResult, InvitationResult, LeaveRequest,
+  LeaveType, NotificationItem, Page, ReportSummary, SettingItem, Site, User,
 } from "./types";
 
 export type RequestFilters = {
@@ -56,9 +57,14 @@ export interface Api {
   notifications(): Promise<NotificationItem[]>;
   readNotification(id: number): Promise<void>;
   employees(q?: string): Promise<Employee[]>;
-  saveEmployee(e: Partial<Employee> & { displayName: string; personnelCode: string; companyId: number }): Promise<Employee>;
+  saveEmployee(e: EmployeeOnboardingDraft): Promise<EmployeeOnboardingResult>;
+  inviteEmployee(id: number, email: string): Promise<InvitationResult>;
+  revokeEmployeeInvitation(id: number, reason: string): Promise<{ status: "revoked" | "unchanged" }>;
+  suspendEmployee(id: number, reason: string): Promise<{ status: "account_suspended" }>;
+  activateAccount(token: string, email: string, password: string): Promise<{ message_fa: string }>;
   companies(): Promise<Company[]>;
   departments(): Promise<Department[]>;
+  sites(): Promise<Site[]>;
   saveCompany(c: Partial<Company> & { code: string; name: string }): Promise<Company>;
   saveDepartment(d: Partial<Department> & { code: string; name: string; companyId: number }): Promise<Department>;
   contracts(employeeId: number): Promise<ContractPeriod[]>;
