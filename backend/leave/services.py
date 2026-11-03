@@ -156,6 +156,7 @@ def submit_request(*, user, employee: EmployeeProfile, leave_type: LeaveType,
     employee = EmployeeProfile.objects.select_for_update(of=("self",)).select_related(
         "company", "site", "department", "manager",
     ).get(pk=employee.pk)
+    leave_type = LeaveType.objects.select_for_update().get(pk=leave_type.pk)
     context = authorization_context(user)
     role = _role_for_employee(context, employee)
 
@@ -205,6 +206,7 @@ def correct_request(*, request_id: int, user, leave_type: LeaveType, start, end,
     req = _locked_scoped_requests(context).select_for_update(of=("self",)).select_related(
         "employee__company", "employee__site", "employee__department", "leave_type",
     ).get(pk=request_id)
+    leave_type = LeaveType.objects.select_for_update().get(pk=leave_type.pk)
     role = _role_for_employee(context, req.employee)
     if role not in (wf.EMPLOYEE, wf.HR):
         raise wf.PermissionDenied("فقط کارمند صاحب درخواست یا HR می‌تواند اصلاح کند")

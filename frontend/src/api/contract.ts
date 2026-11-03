@@ -34,7 +34,7 @@ export interface Api {
   me(): Promise<User>;
   changePassword(current: string, next: string): Promise<void>;
   listTypes(): Promise<LeaveType[]>;
-  saveType(t: Partial<LeaveType> & { key: string; labelFa: string }): Promise<LeaveType>;
+  saveType(t: Partial<LeaveType> & { key: string; labelFa: string; reason: string }): Promise<LeaveType>;
   listRequests(f: RequestFilters): Promise<Page<LeaveRequest>>;
   getRequest(id: number): Promise<LeaveRequest>;
   createRequest(d: LeaveDraft): Promise<LeaveRequest>;

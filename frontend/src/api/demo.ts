@@ -349,14 +349,21 @@ export const demoApi: Api = {
   },
   async listTypes() {
     const u = current();
-    return db.types.filter((t) => has(u, "hr", "admin") || !t.confidential);
+    if (has(u, "admin")) return db.types;
+    if (has(u, "hr")) return db.types.filter((t) => t.enabled);
+    if (has(u, "employee", "manager")) return db.types.filter((t) => t.enabled && t.employeeRequestable);
+    fail(403, "مشاهده انواع مرخصی مجاز نیست", "permission_denied");
   },
   async saveType(t) {
     const u = current();
-    if (!has(u, "hr", "admin")) fail(404, "یافت نشد", "not_found");
+    if (!has(u, "admin")) fail(403, "مدیریت انواع مرخصی مجاز نیست", "permission_denied");
+    const reason = t.reason.trim();
+    const reasonLength = Array.from(reason).length;
+    if (!reasonLength || reasonLength > 500) fail(400, "دلیل تغییر باید بین ۱ تا ۵۰۰ نویسه باشد", "invalid_leave_type");
     if (t.confidential && t.employeeRequestable) fail(422, "نوع محرمانه نمی‌تواند توسط کارمند درخواست شود", "validation");
     const existing = db.types.find((x) => x.id === t.id || x.key === t.key);
-    if (existing) Object.assign(existing, t);
+    const { reason: _reason, ...change } = t;
+    if (existing) Object.assign(existing, change);
     else db.types.push({
       id: nextId(), key: t.key, labelFa: t.labelFa, color: t.color ?? "#0f4c5c",
       countsAgainstBalance: !!t.countsAgainstBalance, requiresApproval: t.requiresApproval !== false,
@@ -364,7 +371,7 @@ export const demoApi: Api = {
       employeeRequestable: t.employeeRequestable !== false, confidential: !!t.confidential,
       enabled: t.enabled !== false, sortOrder: t.sortOrder ?? 10,
     });
-    audit("leave_type_save", "LeaveType", t.key);
+    audit("leave_type_save", "LeaveType", t.key, reason);
     save();
     return db.types.find((x) => x.key === t.key)!;
   },

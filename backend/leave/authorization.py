@@ -23,6 +23,7 @@ READ_WORK_PATTERNS = "work-pattern.read"
 READ_LEAVE_POLICY = "leave-policy.read"
 MANAGE_SYSTEM_CONFIGURATION = "system-configuration.manage"
 MANAGE_ROLE_ASSIGNMENTS = "role-assignment.manage"
+READ_LEAVE_TYPES = "leave_type.read"
 MANAGE_GLOBAL_LEAVE_TYPES = "leave_type.global.manage"
 
 
@@ -106,6 +107,8 @@ def has_permission(context: AuthorizationContext, permission: str, *,
         MANAGE_SYSTEM_CONFIGURATION, MANAGE_ROLE_ASSIGNMENTS, MANAGE_GLOBAL_LEAVE_TYPES,
     }:
         return context.has_role(ADMIN)
+    if permission == READ_LEAVE_TYPES:
+        return any(context.has_role(role) for role in {ADMIN, HR, MANAGER, EMPLOYEE})
     if permission == READ_COMPANY_CALENDAR:
         if company_id is not None:
             return context.has_scope(

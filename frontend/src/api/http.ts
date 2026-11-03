@@ -92,7 +92,7 @@ export const httpApi: Api = {
   saveType: (t) => {
     const { id, ...body } = t;
     return req(id ? `/leave-types/${id}/` : "/leave-types/", {
-      method: id ? "PATCH" : "POST", body: JSON.stringify(body),
+      method: id ? "PATCH" : "POST", body: JSON.stringify({ ...body, reason: t.reason.trim() }),
     });
   },
   listRequests: (f: RequestFilters) => {

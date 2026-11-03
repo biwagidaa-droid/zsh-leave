@@ -27,7 +27,7 @@ from .attachment_security import (
 )
 from .attachment_scanning import scan_stored_attachment
 from .authorization import (
-    MANAGE_GLOBAL_LEAVE_TYPES, authorization_context, can_access_request_attachments,
+    MANAGE_GLOBAL_LEAVE_TYPES, READ_LEAVE_TYPES, authorization_context, can_access_request_attachments,
     has_permission, hr_operation_employees, scoped_employees, scoped_hr_employees,
     scoped_exec_employees, scoped_hr_leave_requests, scoped_leave_requests,
 )
@@ -53,6 +53,7 @@ from .invitation_services import (
     synchronize_employment_access,
 )
 from .hierarchy_services import lock_organizational_hierarchy
+from .serializers import LeaveTypeMutationSerializer
 from .models import (
     AuditEvent,
     BradfordNote,
@@ -215,11 +216,13 @@ def _visible_entitlement_rows(context, rows) -> list[LeaveEntitlement]:
 def leave_types(request, type_id: int | None = None):
     context = _context(request)
     if request.method == "GET":
+        if not has_permission(context, READ_LEAVE_TYPES):
+            return _failure("permission_denied", "مشاهده انواع مرخصی مجاز نیست", 403)
         rows = LeaveType.objects.all()
-        if context.has_role("hr") and not has_permission(context, MANAGE_GLOBAL_LEAVE_TYPES):
+        if not has_permission(context, MANAGE_GLOBAL_LEAVE_TYPES):
             rows = rows.filter(enabled=True)
-        elif not has_permission(context, MANAGE_GLOBAL_LEAVE_TYPES):
-            rows = rows.filter(enabled=True, employee_requestable=True)
+            if not context.has_role("hr"):
+                rows = rows.filter(employee_requestable=True)
         return Response([_leave_type_json(item) for item in rows.order_by("sort_order", "pk")])
 
     if not has_permission(context, MANAGE_GLOBAL_LEAVE_TYPES):
@@ -232,19 +235,43 @@ def leave_types(request, type_id: int | None = None):
     }
     if not isinstance(data, dict) or not data or set(data) - allowed:
         return _failure("invalid_payload", "فیلدهای نوع مرخصی معتبر نیست", 400)
+    serializer = LeaveTypeMutationSerializer(data=data)
+    if not serializer.is_valid():
+        fields = {
+            key: str(messages[0])
+            for key, messages in serializer.errors.items()
+            if messages
+        }
+        return _failure("invalid_leave_type", "اطلاعات نوع مرخصی معتبر نیست", 400, fields)
+    validated = dict(serializer.validated_data)
+    reason = validated.pop("reason")
     try:
         item = admin_services.save_leave_type(
             actor=request.user,
             leave_type_id=type_id,
-            data=data,
-            reason=data.get("reason", ""),
+            data=validated,
+            reason=reason,
             correlation_id=request.headers.get("X-Correlation-ID", ""),
         )
     except LeaveType.DoesNotExist:
         raise Http404
     except PermissionDenied:
         return _failure("permission_denied", "مدیریت انواع مرخصی مجاز نیست", 403)
-    except (ValidationError, IntegrityError, TypeError, ValueError):
+    except admin_services.LeaveTypeConflict as exc:
+        return _failure("leave_type_conflict", str(exc), 409)
+    except IntegrityError:
+        return _failure("leave_type_conflict", "تغییر نوع مرخصی با داده‌های موجود تعارض دارد", 409)
+    except ValidationError as exc:
+        if hasattr(exc, "message_dict"):
+            fields = {
+                key: str(messages[0])
+                for key, messages in exc.message_dict.items()
+                if messages
+            }
+        else:
+            fields = {}
+        return _failure("invalid_leave_type", "اطلاعات نوع مرخصی معتبر نیست", 400, fields)
+    except (TypeError, ValueError):
         return _failure("invalid_leave_type", "اطلاعات نوع مرخصی معتبر نیست", 400)
     return Response(_leave_type_json(item), status=201 if type_id is None else 200)
 
